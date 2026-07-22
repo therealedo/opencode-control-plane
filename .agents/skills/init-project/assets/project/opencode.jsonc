@@ -1,0 +1,69 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "share": "disabled",
+  "default_agent": "build",
+  "snapshot": true,
+  "subagent_depth": 1,
+  "compaction": {
+    "auto": true,
+    "prune": true,
+    "tail_turns": 2
+  },
+  "tool_output": {
+    "max_lines": 300,
+    "max_bytes": 32768
+  },
+  "watcher": {
+    "ignore": [
+      ".git/**",
+      "node_modules/**",
+      ".autopilot/artifacts/**",
+      ".autopilot/runtime/**"
+    ]
+  },
+  "permission": {
+    "*": "ask",
+    "read": {
+      "*": "allow",
+      "*.env": "deny",
+      "*.env.*": "deny",
+      "*.env.example": "allow",
+      ".autopilot/credentials.json": "deny"
+    },
+    "edit": {
+      "*": "allow",
+      "*AGENTS.md": "ask",
+      "opencode.json": "ask",
+      "opencode.jsonc": "ask",
+      ".opencode/**": "ask",
+      ".project/**": "ask",
+      "blueprints/**": "ask",
+      ".autopilot/**": "ask",
+      ".autopilot/init/blueprint.json": "allow"
+    },
+    "bash": {
+      "*": "ask",
+      "git status*": "allow",
+      "git diff*": "allow",
+      "git log*": "allow",
+      "git show*": "allow",
+      "node .autopilot/bin/autopilot.mjs start --detach": "allow",
+      "node .autopilot/bin/autopilot.mjs status": "allow",
+      "node .autopilot/bin/autopilot.mjs pause": "allow",
+      "node .autopilot/bin/autopilot.mjs resume --detach": "allow",
+      "node .autopilot/bin/autopilot.mjs stop": "allow",
+      "git push*": "deny",
+      "git reset --hard*": "deny",
+      "git clean*": "deny",
+      "rm *": "deny",
+      "Remove-Item *": "deny",
+      "* deploy*": "deny"
+    },
+    "external_directory": "deny",
+    "doom_loop": "deny",
+    "webfetch": "ask",
+    "task": "ask",
+    "skill": "allow",
+    "question": "allow"
+  }
+}

@@ -1,0 +1,12 @@
+# BEGIN OPENCODE CONTROL PLANE MANAGED
+# Keep broad ripgrep/glob discovery out of the generated control plane.
+# Autonomous roles receive required project facts in their bounded work packet.
+.project/
+.autopilot/
+.opencode/
+.agents/
+blueprints/
+AGENTS.md
+opencode.json
+opencode.jsonc
+# END OPENCODE CONTROL PLANE MANAGED

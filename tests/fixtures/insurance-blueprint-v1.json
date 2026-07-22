@@ -1,0 +1,198 @@
+{
+  "schema_version": 5,
+  "metadata": {
+    "description": "Insurance AI copilot initial contract",
+    "tags": ["insurance", "copilot"]
+  },
+  "product": {
+    "name": "Insurance AI Copilot",
+    "outcome": "Help insurance agents prepare, conduct, and document customer calls.",
+    "primary_users": ["Insurance agents"],
+    "problem": "Agents need one verified workflow for customer context, calls, and follow-up.",
+    "core_journeys": ["Open customer context, conduct a call, and record follow-up"],
+    "success_signals": ["CRM and call records are synchronized", "Copilot responses pass acceptance tests"],
+    "in_scope": ["English user experience", "CRM integration", "Browser audio calling"],
+    "out_of_scope": ["Production deployment", "Spanish localization"],
+    "completion_boundary": "The copilot, CRM, dialer, and final integration gates pass.",
+    "supported_languages": ["en"]
+  },
+  "architecture": {
+    "components": [
+      { "name": "Copilot", "responsibility": "Coordinate customer context and suggested actions." },
+      { "name": "CRM adapter", "responsibility": "Isolate the selected CRM provider." },
+      { "name": "Dialer adapter", "responsibility": "Isolate browser audio and future dialers." },
+      { "name": "Knowledge system", "responsibility": "Retrieve approved insurance knowledge." }
+    ],
+    "data_flows": ["Customer context flows through adapters into the copilot and approved follow-up records."],
+    "dependency_rules": ["Product workflows depend on CRM and dialer interfaces, never provider implementations."],
+    "side_effect_boundaries": ["CRM and dialer writes occur only through adapters."],
+    "configuration_boundaries": ["Provider credentials enter through named environment variables."],
+    "public_interfaces": ["CRMAdapter", "DialerAdapter", "CopilotService"],
+    "data_contracts": ["Customer and call records use provider-neutral schemas."],
+    "invariants": ["No production credential is stored in the repository.", "Adapters preserve provider-neutral contracts."],
+    "decisions": [
+      {
+        "id": "localization",
+        "area": "Supported languages",
+        "choice": "English only",
+        "rationale": "Initial launch targets English-speaking agents.",
+        "rejected_alternatives": ["English and Spanish"],
+        "dependencies": ["Locale catalog"],
+        "generated_components": ["EnglishLocaleCatalog"],
+        "affected_paths": ["src/i18n/**", "tests/i18n/**"],
+        "environment_variables": [],
+        "test_areas": ["Localization tests"]
+      },
+      {
+        "id": "crm-provider",
+        "area": "CRM provider",
+        "choice": "Twenty CRM",
+        "rationale": "Initial provider assumption.",
+        "rejected_alternatives": ["Zoho CRM"],
+        "dependencies": ["Twenty CRM API"],
+        "generated_components": ["TwentyCRMProvider"],
+        "affected_paths": ["src/integrations/crm/**", "tests/integrations/crm/**"],
+        "environment_variables": ["TWENTY_CRM_API_URL", "TWENTY_CRM_TOKEN"],
+        "test_areas": ["CRM adapter tests", "CRM integration tests"]
+      },
+      {
+        "id": "dialer-provider",
+        "area": "Dialer provider",
+        "choice": "Generic browser audio",
+        "rationale": "Initial browser-only calling assumption.",
+        "rejected_alternatives": ["Kixie"],
+        "dependencies": ["Browser audio APIs"],
+        "generated_components": ["BrowserAudioDialer"],
+        "affected_paths": ["src/integrations/dialer/**", "tests/integrations/dialer/**"],
+        "environment_variables": [],
+        "test_areas": ["Dialer adapter tests"]
+      },
+      {
+        "id": "database",
+        "area": "Database",
+        "choice": "PostgreSQL",
+        "rationale": "Preserve relational customer and call data.",
+        "rejected_alternatives": [],
+        "dependencies": ["PostgreSQL"],
+        "generated_components": ["ApplicationDatabase"],
+        "affected_paths": ["src/database/**", "tests/database/**"],
+        "environment_variables": ["DATABASE_URL"],
+        "test_areas": ["Database tests"]
+      },
+      {
+        "id": "authentication",
+        "area": "Authentication",
+        "choice": "Existing application authentication",
+        "rationale": "Provider migrations must not alter user authentication.",
+        "rejected_alternatives": [],
+        "dependencies": ["Application identity service"],
+        "generated_components": ["AuthService"],
+        "affected_paths": ["src/auth/**", "tests/auth/**"],
+        "environment_variables": [],
+        "test_areas": ["Authentication tests"]
+      },
+      {
+        "id": "ai-pipeline",
+        "area": "AI pipeline",
+        "choice": "Existing copilot pipeline",
+        "rationale": "Integration changes must not alter the AI workflow.",
+        "rejected_alternatives": [],
+        "dependencies": ["Copilot model provider"],
+        "generated_components": ["CopilotPipeline"],
+        "affected_paths": ["src/copilot/**", "tests/copilot/**"],
+        "environment_variables": [],
+        "test_areas": ["Copilot tests"]
+      },
+      {
+        "id": "knowledge-system",
+        "area": "Knowledge system",
+        "choice": "Existing retrieval system",
+        "rationale": "Integration changes must preserve approved knowledge retrieval.",
+        "rejected_alternatives": [],
+        "dependencies": ["Knowledge index"],
+        "generated_components": ["KnowledgeService"],
+        "affected_paths": ["src/knowledge/**", "tests/knowledge/**"],
+        "environment_variables": [],
+        "test_areas": ["Knowledge tests"]
+      }
+    ]
+  },
+  "constraints": {
+    "runtime": "Node.js 20 or newer.",
+    "compatibility": ["Windows, macOS, and Linux"],
+    "resource_limits": ["Autonomous packets remain within the configured byte cap."],
+    "compliance": ["Use isolated non-production insurance test data."],
+    "assumptions": ["CRM and dialer providers expose test environments."],
+    "prohibited_changes": ["Do not weaken provider-neutral adapter contracts."]
+  },
+  "autonomy": {
+    "may_proceed": ["Implement reversible local changes and tests."],
+    "must_stop": ["Stop for production, destructive, or external-account actions."]
+  },
+  "security": {
+    "protected_assets": ["CRM, dialer, database, and model credentials"],
+    "trust_boundaries": ["External CRM and dialer APIs"],
+    "requirements": ["Use only ignored test credential files."]
+  },
+  "quality": {
+    "required_evidence": ["All acceptance criteria and adapter contracts have deterministic evidence."],
+    "testing_strategy": ["Run focused adapter tests and the final integration gate."],
+    "review_priorities": ["Correctness", "Data integrity", "Provider isolation"]
+  },
+  "tooling": {
+    "runtime": "Node.js 20+",
+    "package_manager": "npm",
+    "local_setup": ["Install declared dependencies."],
+    "test_services": ["Local provider fixtures"],
+    "environment_variables": [
+      { "name": "DATABASE_URL", "purpose": "Connect to the isolated test database." },
+      { "name": "TWENTY_CRM_API_URL", "purpose": "Locate the Twenty CRM test API." },
+      { "name": "TWENTY_CRM_TOKEN", "purpose": "Authenticate to the Twenty CRM test account." }
+    ],
+    "connected_tools": [],
+    "gitignore": ["node_modules/", "coverage/"],
+    "ephemeral": ["node_modules", "coverage"]
+  },
+  "context": {
+    "max_bytes": 10240,
+    "review_reserve": { "candidate_and_gates_bytes": 2560, "diff_bytes": 3072 },
+    "bundles": {
+      "product": [".project/brief.md"],
+      "invariants": [".project/constraints.md", ".project/architecture/contracts.md", ".project/security.md"],
+      "implementation": [".project/architecture/overview.md", ".project/tooling.md"],
+      "verification": [".project/quality.md"],
+      "coordination": [".project/autonomy.md", ".project/roadmap.md"]
+    }
+  },
+  "gates": {
+    "verify": { "argv": ["node", "--version"], "timeout_seconds": 30, "credential_profile": null, "success_codes": [0], "max_output_bytes": 4096, "feedback": true },
+    "final": { "argv": ["node", "--version"], "timeout_seconds": 30, "credential_profile": null, "success_codes": [0], "max_output_bytes": 4096, "feedback": false }
+  },
+  "final_gates": ["final"],
+  "tools": { "worker": [], "recovery": [], "reviewer": [] },
+  "opencode": { "model": "test-provider/test-model", "provider_auth_mode": "none", "provider_environment": [], "timeout_seconds": 1200, "max_output_bytes": 1048576 },
+  "budgets": { "max_tasks_per_run": 20, "max_attempts_per_task": 3, "max_elapsed_minutes": 180, "max_no_progress": 2 },
+  "git": { "commit_prefix": "insurance-autopilot" },
+  "credentials": { "phase_profiles": { "execute": null, "repair": null, "review": null }, "profiles": {} },
+  "mcp": {},
+  "roadmap": [{ "id": "M1", "outcome": "Deliver the initial insurance copilot", "exit_signal": "All initial integration gates pass" }],
+  "tasks": [
+    {
+      "id": "M001",
+      "title": "Build the initial insurance copilot integration",
+      "outcome": "Deliver the English, Twenty CRM, and browser-audio vertical slice.",
+      "acceptance_criteria": ["The initial provider-neutral workflow is demonstrated."],
+      "required_evidence": ["The verify and final gates pass."],
+      "non_goals": ["Spanish, Zoho CRM, and Kixie"],
+      "verification_notes": ["Use provider fixtures only."],
+      "depends_on": [],
+      "priority": 100,
+      "context": { "shared": ["invariants"], "execute": ["implementation", "verification"], "repair": ["implementation", "verification"], "review": ["verification"] },
+      "allowed_paths": ["src/**", "tests/**"],
+      "gates": ["verify", "final"],
+      "tool_grants": { "execute": [], "repair": [], "review": [] },
+      "risk": "medium",
+      "attempt_limit": 3
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "schema_version": 2,
+  "max_context_bytes": 10240,
+  "review_reserve": {
+    "candidate_and_gates_bytes": 2560,
+    "diff_bytes": 3072
+  },
+  "bundles": {
+    "product": [
+      ".project/brief.md"
+    ],
+    "invariants": [
+      ".project/constraints.md",
+      ".project/architecture/contracts.md",
+      ".project/security.md"
+    ],
+    "implementation": [
+      ".project/architecture/overview.md",
+      ".project/tooling.md"
+    ],
+    "verification": [
+      ".project/quality.md"
+    ],
+    "coordination": [
+      ".project/autonomy.md",
+      ".project/roadmap.md"
+    ]
+  }
+}

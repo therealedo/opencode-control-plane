@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "opencode": {
+    "command": ["opencode"],
+    "agents": {
+      "execute": "autopilot-worker",
+      "repair": "autopilot-recovery",
+      "review": "autopilot-reviewer"
+    },
+    "credential_profiles": {
+      "execute": null,
+      "repair": null,
+      "review": null
+    },
+    "model": "provider/model",
+    "provider_auth_mode": "none",
+    "provider_environment": [],
+    "timeout_seconds": 1800,
+    "max_output_bytes": 2097152,
+    "auto_approve": true,
+    "attach_url": null
+  },
+  "budgets": {
+    "max_tasks_per_run": 20,
+    "max_attempts_per_task": 3,
+    "max_elapsed_minutes": 180,
+    "max_no_progress": 2
+  },
+  "git": {
+    "require_clean_start": true,
+    "local_commits": true,
+    "commit_prefix": "autopilot",
+    "ephemeral_roots": []
+  },
+  "context": {
+    "max_bytes": 10240
+  },
+  "credential_profiles_file": ".autopilot/credentials.json"
+}

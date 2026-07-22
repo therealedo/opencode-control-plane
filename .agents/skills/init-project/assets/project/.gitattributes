@@ -1,0 +1,10 @@
+# OpenCode Control Plane-owned text stays byte-stable across operating systems.
+/.gitattributes text eol=lf
+/AGENTS.md text eol=lf
+/control-plane text eol=lf
+/control-plane.cmd text eol=lf
+/.ignore text eol=lf
+/.autopilot/control-plane.json text eol=lf
+/.autopilot/bin/** text eol=lf
+/.opencode/agents/** text eol=lf
+/.opencode/commands/** text eol=lf

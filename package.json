@@ -1,0 +1,26 @@
+{
+  "name": "opencode-control-plane",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A high-efficiency, zero-token orchestrator that turns OpenCode into a sandboxed, self-verifying coding worker.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/therealedo/opencode-control-plane.git"
+  },
+  "homepage": "https://github.com/therealedo/opencode-control-plane#readme",
+  "bugs": {
+    "url": "https://github.com/therealedo/opencode-control-plane/issues"
+  },
+  "scripts": {
+    "setup": "node scripts/install.mjs",
+    "upgrade": "node scripts/upgrade.mjs",
+    "validate": "node scripts/validate-source.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "check": "npm run validate && npm test",
+    "install:dry-run": "node scripts/install.mjs --dry-run"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

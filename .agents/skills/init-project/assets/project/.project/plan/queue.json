@@ -1,0 +1,39 @@
+{
+  "schema_version": 2,
+  "revision": 0,
+  "project_status": "initializing",
+  "tasks": {
+    "M001": {
+      "title": "Build the first verified vertical slice",
+      "status": "pending",
+      "priority": 100,
+      "depends_on": [],
+      "spec": ".project/plan/milestones/M001.md",
+      "context": {
+        "shared": [
+          "invariants"
+        ],
+        "execute": [
+          "implementation",
+          "verification"
+        ],
+        "repair": [
+          "implementation",
+          "verification"
+        ],
+        "review": [
+          "verification"
+        ]
+      },
+      "allowed_paths": [],
+      "gates": [],
+      "tool_grants": {
+        "execute": [],
+        "repair": [],
+        "review": []
+      },
+      "risk": "medium",
+      "attempt_limit": 3
+    }
+  }
+}

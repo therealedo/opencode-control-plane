@@ -1,0 +1,193 @@
+{
+  "schema_version": 5,
+  "metadata": {
+    "description": "",
+    "tags": []
+  },
+  "product": {
+    "name": "{{PROJECT_NAME}}",
+    "outcome": "",
+    "primary_users": [],
+    "problem": "",
+    "core_journeys": [],
+    "success_signals": [],
+    "in_scope": [],
+    "out_of_scope": [],
+    "completion_boundary": "",
+    "supported_languages": []
+  },
+  "architecture": {
+    "components": [],
+    "data_flows": [],
+    "dependency_rules": [],
+    "side_effect_boundaries": [],
+    "configuration_boundaries": [],
+    "public_interfaces": [],
+    "data_contracts": [],
+    "invariants": [],
+    "decisions": []
+  },
+  "constraints": {
+    "runtime": "",
+    "compatibility": [],
+    "resource_limits": [],
+    "compliance": [],
+    "assumptions": [],
+    "prohibited_changes": []
+  },
+  "autonomy": {
+    "may_proceed": [],
+    "must_stop": []
+  },
+  "security": {
+    "protected_assets": [],
+    "trust_boundaries": [],
+    "requirements": []
+  },
+  "quality": {
+    "required_evidence": [],
+    "testing_strategy": [],
+    "review_priorities": []
+  },
+  "tooling": {
+    "runtime": "",
+    "package_manager": "",
+    "local_setup": [],
+    "test_services": [],
+    "environment_variables": [],
+    "connected_tools": [],
+    "gitignore": [],
+    "ephemeral": []
+  },
+  "context": {
+    "max_bytes": 10240,
+    "review_reserve": {
+      "candidate_and_gates_bytes": 2560,
+      "diff_bytes": 3072
+    },
+    "bundles": {
+      "product": [
+        ".project/brief.md"
+      ],
+      "invariants": [
+        ".project/constraints.md",
+        ".project/architecture/contracts.md",
+        ".project/security.md"
+      ],
+      "implementation": [
+        ".project/architecture/overview.md",
+        ".project/tooling.md"
+      ],
+      "verification": [
+        ".project/quality.md"
+      ],
+      "coordination": [
+        ".project/autonomy.md",
+        ".project/roadmap.md"
+      ]
+    }
+  },
+  "gates": {
+    "verify": {
+      "argv": [],
+      "timeout_seconds": 300,
+      "credential_profile": null,
+      "success_codes": [
+        0
+      ],
+      "max_output_bytes": 32768,
+      "feedback": true
+    },
+    "final": {
+      "argv": [],
+      "timeout_seconds": 600,
+      "credential_profile": null,
+      "success_codes": [
+        0
+      ],
+      "max_output_bytes": 32768,
+      "feedback": false
+    }
+  },
+  "final_gates": [
+    "final"
+  ],
+  "tools": {
+    "worker": [],
+    "recovery": [],
+    "reviewer": []
+  },
+  "opencode": {
+    "model": "provider/model",
+    "provider_auth_mode": "none",
+    "provider_environment": [],
+    "timeout_seconds": 1800,
+    "max_output_bytes": 2097152
+  },
+  "budgets": {
+    "max_tasks_per_run": 20,
+    "max_attempts_per_task": 3,
+    "max_elapsed_minutes": 180,
+    "max_no_progress": 2
+  },
+  "git": {
+    "commit_prefix": "autopilot"
+  },
+  "credentials": {
+    "phase_profiles": {
+      "execute": null,
+      "repair": null,
+      "review": null
+    },
+    "profiles": {}
+  },
+  "mcp": {},
+  "roadmap": [
+    {
+      "id": "M1",
+      "outcome": "",
+      "exit_signal": ""
+    }
+  ],
+  "tasks": [
+    {
+      "id": "M001",
+      "title": "",
+      "outcome": "",
+      "acceptance_criteria": [],
+      "required_evidence": [],
+      "non_goals": [],
+      "verification_notes": [],
+      "depends_on": [],
+      "priority": 100,
+      "context": {
+        "shared": [
+          "invariants"
+        ],
+        "execute": [
+          "implementation",
+          "verification"
+        ],
+        "repair": [
+          "implementation",
+          "verification"
+        ],
+        "review": [
+          "verification"
+        ]
+      },
+      "allowed_paths": [],
+      "gates": [
+        "verify",
+        "final"
+      ],
+      "tool_grants": {
+        "execute": [],
+        "repair": [],
+        "review": []
+      },
+      "risk": "medium",
+      "attempt_limit": 3
+    }
+  ]
+}

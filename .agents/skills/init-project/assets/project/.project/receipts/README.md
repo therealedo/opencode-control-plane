@@ -1,0 +1,3 @@
+# Receipts
+
+The controller writes one immutable `<task-id>.json` receipt after accepted review and passing gates. It binds task/spec/diff and both semantic and exact serialized-file hashes for the accepted/planned queue and receipt, gates, review, changed files, commits, and bounded per-phase tool-call/returned-byte counters. A phase entry may also contain validated OpenCode input/output/reasoning/cache token totals and provider-reported cost. This telemetry never affects execution or acceptance and is omitted as needed before the fixed task-usage ledger byte cap; mandatory tool counters are retained. Receipts replace an ever-growing changelog and stay out of normal model context.
