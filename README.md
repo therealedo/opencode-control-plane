@@ -106,11 +106,13 @@ Use limited test tenants—not production or personal accounts. A credential is 
 ## How it stays efficient
 
 - Scripts create and update known structures instead of asking a model to write boilerplate.
-- `AGENTS.md` is a small router; detailed context is split into bounded files.
+- `AGENTS.md` is a small manual/recovery router and is not reloaded into every autonomous phase.
 - Each task, repair, and independent review uses a fresh OpenCode session.
-- Workers receive only the task's selected context, paths, tools, and test credentials.
+- A deterministic compiler sends only the task's selected project facts, paths, tools, and test credentials while preserving code blocks exactly.
+- Workers inspect narrowly, reuse existing/native capabilities before adding code, and reviewers reject needless files, dependencies, configuration, and abstractions without relaxing quality or safety.
 - Tests, Git transitions, status polling, upgrades, and context handoffs are deterministic and token-free.
-- Blueprints and receipts preserve durable memory without growing every prompt.
+- Tool results and worker contracts are paginated and bounded; full evidence stays in artifacts instead of prompts.
+- Blueprints and receipts preserve durable memory without growing every prompt, while receipts record actual model usage for release comparisons.
 
 ## If something goes wrong
 
@@ -133,6 +135,7 @@ npm run upgrade -- --local --all-projects
 More detail:
 
 - [Architecture and context lifecycle](docs/architecture.md)
+- [Token-efficiency design and measurements](docs/token-efficiency.md)
 - [Blueprint initialization and evolution](docs/blueprints.md)
 - [Security boundaries](docs/security.md)
 - [Maintenance and releases](docs/maintenance.md)

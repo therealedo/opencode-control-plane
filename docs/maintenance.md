@@ -15,6 +15,8 @@
 5. Run `npm run upgrade -- --local --all-projects` against a staging home and disposable initialized projects.
 6. Commit, create the matching `vMAJOR.MINOR.PATCH` tag, and publish a stable GitHub Release at `https://github.com/therealedo/opencode-control-plane.git`.
 
+For changes to prompts, generated project references, packet assembly, or tool schemas, also update the fixed footprint fixture and token-efficiency test. Compare like-for-like phases and report framework-owned bytes separately from provider-reported tokens, reasoning, cache reads, cost, and acceptance quality. Never advertise a byte reduction as a guaranteed billing reduction.
+
 ## Global upgrade
 
 The normal `npm run upgrade` path verifies a clean Git clone and the exact public origin, performs a fast-forward-only pull, validates source, and invokes installer upgrade mode. Installer upgrade mode compares every destination with its prior whole-tree hash. Missing or edited outputs abort all writes. Staging and swaps are transactional.

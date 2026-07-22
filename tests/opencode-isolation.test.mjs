@@ -89,16 +89,29 @@ if (process.argv.includes("--help")) {
 }
 
 if (!(runIndex >= 0 && dirIndex > runIndex && agentIndex > dirIndex && path.isAbsolute(argv[dirIndex + 1] ?? ""))) {
-  throw new Error("phase did not place run --dir PROJECT before phase options")
+  throw new Error("phase did not place run --dir STERILE before phase options")
 }
 neutralCwd("phase")
-const root = path.resolve(argv[dirIndex + 1])
-if (root === launchCwd) throw new Error("phase launched from the project directory")
+const phaseDir = path.resolve(argv[dirIndex + 1])
+if (phaseDir !== launchCwd) throw new Error("phase project discovery did not stay in the sterile launch directory")
+const toolPolicy = JSON.parse(Buffer.from(process.env.AUTOPILOT_TOOL_POLICY, "base64").toString("utf8"))
+const root = path.resolve(toolPolicy.root)
+if (root === launchCwd) throw new Error("phase tool policy did not retain the real project root")
+const phaseFromRoot = path.relative(root, phaseDir)
+if (phaseFromRoot !== ".." && !phaseFromRoot.startsWith(".." + path.sep) && !path.isAbsolute(phaseFromRoot)) {
+  throw new Error("sterile phase directory is nested inside the real project and can discover project instructions")
+}
 if (process.env.PROJECT_DOTENV_SENTINEL !== undefined) throw new Error("project dotenv sentinel reached the phase environment")
 if (process.env.BUN_OPTIONS !== "--no-env-file") throw new Error("phase did not disable Bun dotenv loading")
 try {
   await readFile(path.join(launchCwd, ".env.local"), "utf8")
   throw new Error("phase launch cwd contains a project dotenv file")
+} catch (error) {
+  if (error?.code !== "ENOENT") throw error
+}
+try {
+  await readFile(path.join(phaseDir, "AGENTS.md"), "utf8")
+  throw new Error("phase project discovery can load the project's AGENTS.md")
 } catch (error) {
   if (error?.code !== "ENOENT") throw error
 }
@@ -124,9 +137,25 @@ for (const name of ["HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "OPENCODE_CONFIG
 
 const configText = process.env.OPENCODE_CONFIG_CONTENT ?? ""
 const config = JSON.parse(configText)
-const toolPolicy = JSON.parse(Buffer.from(process.env.AUTOPILOT_TOOL_POLICY, "base64").toString("utf8"))
-if (Object.keys(config.mcp ?? {}).join(",") !== expectedServer || excludedServer in (config.mcp ?? {})) {
+if (config.tool_output?.max_bytes !== 16 * 1024 || config.tool_output?.max_lines !== 200) {
+  throw new Error("isolated tool output caps do not match the custom-tool page boundary")
+}
+const selectedServers = Object.keys(config.mcp ?? {}).sort()
+const expectedServers = worker && config.mcp?.local_root
+  ? [expectedServer, "local_root"].sort()
+  : [expectedServer]
+if (JSON.stringify(selectedServers) !== JSON.stringify(expectedServers) || excludedServer in (config.mcp ?? {})) {
   throw new Error("phase received an ungranted MCP server")
+}
+if (config.mcp?.local_root) {
+  const local = config.mcp.local_root
+  const localCwdFromRoot = path.relative(root, path.resolve(local.cwd ?? ""))
+  if (
+    !Array.isArray(local.command) || path.resolve(local.command.at(-1) ?? "") !== root ||
+    local.project_root_argument !== undefined || !path.isAbsolute(local.cwd ?? "") ||
+    (localCwdFromRoot !== ".." && !localCwdFromRoot.startsWith(".." + path.sep) && !path.isAbsolute(localCwdFromRoot)) ||
+    !local.cwd.includes("opencode-phase-")
+  ) throw new Error("local MCP did not receive the explicit real root from a sterile working directory")
 }
 if (
   toolPolicy.max_returned_bytes !== 64 * 1024 ||
@@ -191,7 +220,9 @@ observations.push({
   feedback_permission: worker ? "allow" : "deny",
   feedback_runner_exercised: feedbackRunnerExercised,
   launch_cwd_is_sterile: launchCwd.includes("opencode-phase-") && path.basename(launchCwd) === "launch-cwd",
-  project_dir_argument: root,
+  project_dir_argument: phaseDir,
+  project_root_from_policy: root,
+  project_agents_absent: true,
   dotenv_sentinel_absent: process.env.PROJECT_DOTENV_SENTINEL === undefined,
 })
 
@@ -336,6 +367,7 @@ async function writeJson(file, value) {
 `
 
 async function configureIsolationProject(t, root, {
+  localRootArgument = false,
   reservedLocalEnvironment = false,
   workerSecret = "worker-phase-secret-987654",
   reviewSecret = "review-phase-secret-123456",
@@ -346,6 +378,20 @@ async function configureIsolationProject(t, root, {
   t.after(() => rm(agentRoot, { recursive: true, force: true }))
   await mkdir(runtime, { recursive: true })
   await writeFile(agent, isolatedAgentSource, "utf8")
+  let localMcp = null
+  if (localRootArgument) {
+    localMcp = path.join(agentRoot, process.platform === "win32" ? "local-root-mcp.cmd" : "local-root-mcp")
+    await writeFile(
+      localMcp,
+      process.platform === "win32" ? "@echo off\r\nexit /b 0\r\n" : "#!/bin/sh\nexit 0\n",
+      "utf8",
+    )
+    if (process.platform === "win32") {
+      await writeFile(path.join(agentRoot, "local-root-mcp.ps1"), "exit 0\r\n", "utf8")
+    } else {
+      await chmod(localMcp, 0o755)
+    }
+  }
   await writeFile(
     path.join(root, ".env.worker.local"),
     `WORKER_MCP_TOKEN=${JSON.stringify(workerSecret)}\n`,
@@ -391,21 +437,28 @@ async function configureIsolationProject(t, root, {
       url: "https://review.example.invalid/mcp",
       headers: { Authorization: "Bearer {env:REVIEW_MCP_TOKEN}" },
     },
+    ...(localMcp ? {
+      local_root: {
+        type: "local",
+        command: [localMcp],
+        project_root_argument: true,
+      },
+    } : {}),
   }
   await writeJson(openCodeFile, openCode)
   await writeJson(path.join(root, ".project", "tools.json"), {
     schema_version: 1,
     roles: {
-      worker: ["worker_docs_query", "review_docs_query"],
-      recovery: ["worker_docs_query", "review_docs_query"],
+      worker: ["worker_docs_query", "review_docs_query", ...(localMcp ? ["local_root_query"] : [])],
+      recovery: ["worker_docs_query", "review_docs_query", ...(localMcp ? ["local_root_query"] : [])],
       reviewer: ["worker_docs_query", "review_docs_query"],
     },
   })
   const queueFile = path.join(root, ".project", "plan", "queue.json")
   const queue = await readJson(queueFile)
   queue.tasks.M001.tool_grants = {
-    execute: ["worker_docs_query"],
-    repair: ["worker_docs_query"],
+    execute: ["worker_docs_query", ...(localMcp ? ["local_root_query"] : [])],
+    repair: ["worker_docs_query", ...(localMcp ? ["local_root_query"] : [])],
     review: ["review_docs_query"],
   }
   await writeJson(queueFile, queue)
@@ -613,17 +666,16 @@ test("controller-owned tools exclude ignored content and reject unsafe file iden
     /Match src\/wide\.txt:1 cannot fit.*read that file at offset 1.*line:column cursor/s,
   )
   const paged = await tools.read.execute({ path: "src/paged.txt" })
-  assert.match(paged, /^\[read src\/paged\.txt range=1:1-120:\d+ total=151 next=121:1\]\nline-1\n/)
+  assert.match(paged, /^\[read src\/paged\.txt range=1:1-60:\d+ total=151 next=61:1\]\nline-1\n/)
   assert.doesNotMatch(paged, /\n1: line-1/)
-  assert.match(await tools.read.execute({ path: "src/paged.txt", offset: 121, limit: 30 }), /line-150/)
+  assert.match(await tools.read.execute({ path: "src/paged.txt", offset: 61, limit: 90 }), /line-150/)
   assert.match(await tools.read.execute({ path: "src/public.txt" }), /\nPUBLIC NEEDLE\n?$/)
   await assert.rejects(tools.read.execute({ path: "src/hidden.txt" }), /Protected or ignored path/)
   await assert.rejects(tools.read.execute({ path: "src/hardlink.txt" }), /private regular file/)
   await assert.rejects(tools.read.execute({ path: "src/bad|name.txt" }), /portable project-relative path/)
-  await assert.rejects(
-    tools.read.execute({ path: "src/wide.txt" }),
-    /phase byte budget 32768 would be exceeded.*Scope is too broad.*paginate with offset\/max_results/s,
-  )
+  const widePage = await tools.read.execute({ path: "src/wide.txt" })
+  assert.ok(Buffer.byteLength(widePage, "utf8") <= 16 * 1024)
+  assert.match(widePage, /^\[read src\/wide\.txt range=1:1-1:\d+ total=2 next=1:\d+\]/)
 
   assert.equal(
     await tools.mutate.execute({ operation: "move", path: "src/move.txt", destination: "src/moved.txt", executable: null }),
@@ -1435,7 +1487,10 @@ test("fresh phases use pure sterile profiles and file-substituted MCP credential
     assert.equal(item.pure_argv, true)
     assert.equal(item.tool_usage_enabled, true)
     assert.equal(item.launch_cwd_is_sterile, true)
-    assert.equal(item.project_dir_argument, root)
+    assert.notEqual(item.project_dir_argument, root)
+    assert.match(item.project_dir_argument, /opencode-phase-/)
+    assert.equal(item.project_root_from_policy, root)
+    assert.equal(item.project_agents_absent, true)
     assert.equal(item.dotenv_sentinel_absent, true)
     await assert.rejects(access(item.secret_file))
   }
@@ -1448,6 +1503,18 @@ test("fresh phases use pure sterile profiles and file-substituted MCP credential
   assert.equal(`${result.stdout}\n${result.stderr}`.includes("worker-phase-secret-987654"), false)
   assert.equal(`${result.stdout}\n${result.stderr}`.includes("review-phase-secret-123456"), false)
   assert.equal(`${result.stdout}\n${result.stderr}`.includes(dotenvSentinel), false)
+})
+
+test("a local MCP receives the explicit real root while its working directory stays sterile", async (t) => {
+  const root = await createScaffold(t, { ready: true })
+  await configureIsolationProject(t, root, { localRootArgument: true })
+  const result = await run(
+    [process.execPath, path.join(root, ".autopilot", "bin", "autopilot.mjs"), "start"],
+    { cwd: root, env: await sterileControllerEnvironment(root) },
+  )
+  assert.equal(result.code, 0, result.stderr || result.stdout)
+  const state = await readJson(path.join(root, ".autopilot", "state.json"))
+  assert.equal(state.status, "complete", JSON.stringify(state, null, 2))
 })
 
 test("reserved local MCP environment is rejected twice and failed setup removes phase secrets", async (t) => {

@@ -47,14 +47,16 @@ const schema = {
 
 const MAX_READ_BYTES = 256 * 1024
 const MAX_WRITE_BYTES = 1024 * 1024
-const MAX_OUTPUT_BYTES = 32 * 1024
+// Must not exceed the isolated OpenCode tool_output.max_bytes value. OpenCode
+// must never truncate a valid page after this tool has charged it to the phase.
+const MAX_OUTPUT_BYTES = 16 * 1024
 const MAX_SEARCH_FILES = 4000
 const MAX_SEARCH_BYTES = 64 * 1024 * 1024
-const DEFAULT_READ_LINES = 120
+const DEFAULT_READ_LINES = 60
 const MAX_READ_LINES = 300
-const DEFAULT_LIST_RESULTS = 200
+const DEFAULT_LIST_RESULTS = 100
 const MAX_LIST_RESULTS = 500
-const DEFAULT_SEARCH_RESULTS = 50
+const DEFAULT_SEARCH_RESULTS = 20
 const MAX_SEARCH_RESULTS = 100
 const DEFAULT_PHASE_RETURNED_BYTES = 64 * 1024
 const CONTRACT_RETURN_RESERVE = 2 * 1024
@@ -515,10 +517,12 @@ function candidateValue(args) {
   let blocker = null
   if (args.status === "blocked") {
     exactKeys(args.blocker, ["kind", "message", "required_action", "resume_condition"], "blocker")
-    blocker = Object.fromEntries(Object.entries(args.blocker).map(([key, value]) => [
-      key,
-      boundedContractText(value, `blocker.${key}`),
-    ]))
+    blocker = {
+      kind: boundedContractText(args.blocker.kind, "blocker.kind", 128),
+      message: boundedContractText(args.blocker.message, "blocker.message", 1024),
+      required_action: boundedContractText(args.blocker.required_action, "blocker.required_action", 1024),
+      resume_condition: boundedContractText(args.blocker.resume_condition, "blocker.resume_condition", 1024),
+    }
   } else if (args.blocker !== null && args.blocker !== undefined) {
     throw new Error("blocker is allowed only for blocked status")
   }
@@ -527,7 +531,7 @@ function candidateValue(args) {
     task_id: policy.task_id,
     attempt: policy.attempt,
     status: args.status,
-    summary: boundedContractText(args.summary, "summary"),
+    summary: boundedContractText(args.summary, "summary", 512),
     changed_files: contractChangedFiles(),
     environment_variables: normalizedEnvironment.sort(),
     blocker,
@@ -537,7 +541,7 @@ function candidateValue(args) {
 function reviewValue(args) {
   exactKeys(args, ["status", "summary", "findings"], "review input")
   if (!["approved", "changes_requested", "blocked"].includes(args.status)) throw new Error("review status is invalid")
-  if (!Array.isArray(args.findings) || args.findings.length > 64) throw new Error("findings must contain at most 64 entries")
+  if (!Array.isArray(args.findings) || args.findings.length > 16) throw new Error("findings must contain at most 16 entries")
   const findings = args.findings.map((finding, index) => {
     exactKeys(finding, ["severity", "file", "message"], `findings.${index}`)
     if (!["low", "medium", "high", "critical"].includes(finding.severity)) {
@@ -546,7 +550,7 @@ function reviewValue(args) {
     return {
       severity: finding.severity,
       file: boundedContractText(finding.file, `findings.${index}.file`, 512),
-      message: boundedContractText(finding.message, `findings.${index}.message`),
+      message: boundedContractText(finding.message, `findings.${index}.message`, 768),
     }
   })
   if (args.status === "approved" && findings.some((finding) => finding.severity !== "low")) {
@@ -556,7 +560,7 @@ function reviewValue(args) {
     schema_version: 1,
     task_id: policy.task_id,
     status: args.status,
-    summary: boundedContractText(args.summary, "summary"),
+    summary: boundedContractText(args.summary, "summary", 512),
     findings,
   }
 }
@@ -1053,7 +1057,7 @@ function conciseFeedbackResult(value, gateId, definitionSha256) {
 }
 
 export const check = defineTool({
-  description: `Run one controller-approved, credential-free task gate for bounded feedback (maximum ${policy.max_feedback_calls} calls). Eligible: ${Object.keys(policy.feedback_gates).join(", ") || "none"}. The controller reruns every authoritative gate after the candidate.`,
+  description: "Run one approved credential-free feedback gate. The controller reruns authoritative gates.",
   args: { gate_id: schema.string() },
   async execute(args) {
     exactKeys(args, ["gate_id"], "check input")
@@ -1095,28 +1099,29 @@ export const check = defineTool({
   },
 })
 
-const contractText = () => schema.string().min(1).max(2048)
+const shortContractText = () => schema.string().min(1).max(512)
+const blockerText = () => schema.string().min(1).max(1024)
 const blockerSchema = schema.object({
-  kind: contractText(),
-  message: contractText(),
-  required_action: contractText(),
-  resume_condition: contractText(),
+  kind: schema.string().min(1).max(128),
+  message: blockerText(),
+  required_action: blockerText(),
+  resume_condition: blockerText(),
 }).nullable()
 const findingSchema = schema.object({
   severity: schema.enum(["low", "medium", "high", "critical"]),
   file: schema.string().min(1).max(512),
-  message: contractText(),
+  message: schema.string().min(1).max(768),
 })
 const candidateArgs = {
   status: schema.enum(["complete", "blocked", "failed"]),
-  summary: contractText(),
+  summary: shortContractText(),
   environment_variables: schema.array(schema.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).max(64),
   blocker: blockerSchema,
 }
 const reviewArgs = {
   status: schema.enum(["approved", "changes_requested", "blocked"]),
-  summary: contractText(),
-  findings: schema.array(findingSchema).max(64),
+  summary: shortContractText(),
+  findings: schema.array(findingSchema).max(16),
 }
 
 export const contract = defineTool({

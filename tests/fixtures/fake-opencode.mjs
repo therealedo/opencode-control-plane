@@ -34,9 +34,14 @@ if (arguments_.includes("--help")) {
   process.exit(0)
 }
 const directoryIndex = arguments_.indexOf("--dir")
-const root = directoryIndex >= 0 && arguments_[directoryIndex + 1]
+const openCodeRoot = directoryIndex >= 0 && arguments_[directoryIndex + 1]
   ? path.resolve(arguments_[directoryIndex + 1])
   : process.cwd()
+let root = openCodeRoot
+try {
+  const policy = JSON.parse(Buffer.from(process.env.AUTOPILOT_TOOL_POLICY ?? "", "base64").toString("utf8"))
+  if (path.isAbsolute(policy.root ?? "")) root = path.resolve(policy.root)
+} catch {}
 const runtime = path.join(root, ".autopilot", "runtime")
 const prompt = arguments_.at(-1) ?? ""
 const stage = /^Stage:\s*(\S+)/m.exec(prompt)?.[1] ?? "unknown"

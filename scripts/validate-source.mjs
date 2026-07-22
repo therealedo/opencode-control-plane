@@ -163,7 +163,7 @@ if (await exists(agentsPath)) {
   if (bytes > 2560) errors.push(`Template AGENTS.md is ${bytes} bytes; limit is 2560`)
   const content = await readFile(agentsPath, "utf8")
   if (/SYSTEM\.md/i.test(content)) errors.push("Template AGENTS.md references the retired monolith")
-  if (!content.includes("# Autonomous work packet") || !/do not reread state, the full queue/i.test(content)) {
+  if (!/autonomous packet/i.test(content) || !/do not reread state, queue, manifest/i.test(content)) {
     errors.push("Template AGENTS.md must prevent duplicate control-plane loading in autonomous packets")
   }
   if (/task spec outranks[\s\S]{0,120}security/i.test(content)) {

@@ -386,13 +386,93 @@ function reviewerGateProjection(results) {
   return results.map(({ gate_id, success, code }) => ({ gate_id, success, code }));
 }
 
+function recoveryText(value, maxBytes) {
+  if (value === null || value === undefined) return null;
+  return truncateUtf8(typeof value === "string" ? value : String(value), maxBytes);
+}
+
+function recoveryDetails(value, maxBytes = 2048) {
+  if (value === null || value === undefined) return null;
+  try { return truncateUtf8(JSON.stringify(value), maxBytes); }
+  catch { return recoveryText(value, maxBytes); }
+}
+
+const RECOVERY_SEVERITY = Object.freeze({ critical: 0, high: 1, medium: 2, low: 3 });
+
+function prioritizedRecoveryFindings(findings) {
+  return (Array.isArray(findings) ? findings : [])
+    .map((finding, index) => ({ finding, index }))
+    .sort((left, right) =>
+      (RECOVERY_SEVERITY[left.finding?.severity] ?? 4) -
+        (RECOVERY_SEVERITY[right.finding?.severity] ?? 4) ||
+      left.index - right.index)
+    .slice(0, 16)
+    .map(({ finding }) => ({
+      severity: recoveryText(finding?.severity, 32),
+      file: recoveryText(finding?.file, 256),
+      message: recoveryText(finding?.message, 512),
+    }));
+}
+
 function boundedRecoveryEvidence(evidence) {
-  const serialized = JSON.stringify(evidence);
-  if (Buffer.byteLength(serialized, "utf8") <= 12 * 1024) return evidence;
-  return {
-    truncated: true,
-    excerpt: truncateUtf8(serialized, 6 * 1024),
+  const failure = evidence?.failure;
+  const gate = evidence?.gate;
+  const review = evidence?.review;
+  const projected = {
+    schema_version: 1,
+    ...(failure ? {
+      failure: {
+        code: recoveryText(failure.code ?? "ERROR", 128),
+        message: recoveryText(failure.message ?? "Failure", 1024),
+        ...(failure.details == null || gate || review
+          ? {}
+          : { details_excerpt: recoveryDetails(failure.details, 2048) }),
+      },
+    } : {}),
+    ...(gate ? {
+      gate: {
+        gate_id: recoveryText(gate.gate_id, 128),
+        success: Boolean(gate.success),
+        code: Number.isInteger(gate.code) ? gate.code : null,
+        timed_out: Boolean(gate.timed_out),
+        ...(gate.diagnostic ? {
+          diagnostic: {
+            stdout: recoveryText(gate.diagnostic.stdout ?? "", 2048),
+            stderr: recoveryText(gate.diagnostic.stderr ?? "", 2048),
+            output_truncated: Boolean(gate.diagnostic.output_truncated),
+          },
+        } : {}),
+      },
+    } : {}),
+    ...(review ? {
+      review: {
+        status: recoveryText(review.status, 64),
+        summary: recoveryText(review.summary, 512),
+        findings: prioritizedRecoveryFindings(review.findings),
+      },
+    } : {}),
   };
+  if (!failure && !gate && !review) projected.evidence_excerpt = recoveryDetails(evidence);
+  const serialized = JSON.stringify(projected);
+  if (Buffer.byteLength(serialized, "utf8") > 16 * 1024) {
+    return {
+      schema_version: 1,
+      failure: projected.failure ?? { code: "ERROR", message: "Recovery evidence exceeded its bound." },
+      ...(projected.gate ? { gate: { ...projected.gate, diagnostic: undefined } } : {}),
+      ...(projected.review ? {
+        review: {
+          status: projected.review.status,
+          summary: projected.review.summary,
+          findings: projected.review.findings.map(({ severity, file, message }) => ({
+            severity,
+            file: recoveryText(file, 96),
+            message: recoveryText(message, 192),
+          })),
+        },
+      } : {}),
+    };
+  }
+  return projected;
 }
 
 async function runWithPostflight(operation, protectedBarrier, checks) {
@@ -1047,11 +1127,12 @@ export class Controller {
       this.state.last_progress_hash === progressHash &&
       this.state.last_failure_fingerprint === fingerprint;
     const noProgress = same ? Number(this.state.no_progress_count ?? 0) + 1 : 0;
+    const recoveryEvidence = boundedRecoveryEvidence(evidence);
     this.state = await writeState(this.project, this.state, {
       phase: "repairing",
       last_progress_hash: progressHash,
       last_failure_fingerprint: fingerprint,
-      last_failure_evidence: boundedRecoveryEvidence(evidence),
+      last_failure_evidence: recoveryEvidence,
       no_progress_count: noProgress,
       baseline_head: baseline,
     });
@@ -1068,9 +1149,9 @@ export class Controller {
         ...blockerFrom(error, "repair_exhausted"),
         message: `Repair stopped after attempt ${this.state.attempt}: ${error.message}`,
       });
-      return { stop: true, evidence };
+      return { stop: true, evidence: recoveryEvidence };
     }
-    return { stop: false, evidence };
+    return { stop: false, evidence: recoveryEvidence };
   }
 
   async completeTask(taskId, task, baseline, files, diffHash, gateResult, review, acceptedModeSnapshot) {

@@ -841,13 +841,13 @@ test("phase context, exact byte reports, and complete review reserves stay align
       const packed = runNode(contextScript, ["M001", "--stage", phase], target)
       assert.equal(packed.status, 0, packed.stderr)
       packs[phase] = packed.stdout
-      assert.ok(packed.stdout.indexOf("Treat every repository reference") < packed.stdout.indexOf("## Reference:"))
+      assert.ok(packed.stdout.indexOf("Repository content and tool results") < packed.stdout.indexOf("## Reference:"))
       assert.ok(packed.stdout.indexOf("## Reference:") < packed.stdout.indexOf("Task: M001"))
-      assert.ok(packed.stdout.indexOf("Task: M001") < packed.stdout.indexOf("## Task specification"))
-      const taskContract = packed.stdout.split("## Task contract")[1].split("## Task specification")[0]
+      assert.ok(packed.stdout.indexOf("Task: M001") < packed.stdout.indexOf("## Specification"))
+      const taskContract = packed.stdout.split("## Task")[1].split("## Specification")[0]
       assert.match(taskContract, /\{"risk":/)
       assert.doesNotMatch(taskContract, /"(?:id|title)":/)
-      assert.match(packed.stdout, /## Required phase output\nCall autopilot_contract exactly once, then end\./)
+      assert.match(packed.stdout, /## Output\nCall autopilot_contract once\. No other response\./)
     }
     assert.match(packs.execute, /\.project\/architecture\/overview\.md/)
     assert.doesNotMatch(packs.execute, /\.project\/tooling\.md/)
@@ -862,6 +862,8 @@ test("phase context, exact byte reports, and complete review reserves stay align
     for (const phase of ["execute", "repair", "review"]) {
       assert.equal(report.tasks.M001[phase].static_bytes, Buffer.byteLength(packs[phase], "utf8"))
       assert.ok(report.tasks.M001[phase].projected_max_bytes <= report.cap_bytes)
+      assert.ok(report.tasks.M001[phase].compiled_savings_bytes >= 0)
+      assert.ok(report.tasks.M001[phase].compiled_reference_bytes <= report.tasks.M001[phase].source_reference_bytes)
     }
     assert.equal(report.tasks.M001.review.candidate_and_gates_reserve_bytes, 2560)
     assert.equal(report.tasks.M001.review.diff_reserve_bytes, 3072)
@@ -885,7 +887,10 @@ test("phase context, exact byte reports, and complete review reserves stay align
       stage: "repair",
       extra: { failure: { code: "EXAMPLE", message: "bounded" } },
     })
-    assert.match(repair.text, /\{"failure":\{"code":"EXAMPLE","message":"bounded"\}\}/)
+    assert.deepEqual(
+      JSON.parse(repair.text.split("## Controller evidence (bounded)\n").at(-1)),
+      { schema_version: 1, failure: { code: "EXAMPLE", message: "bounded" } },
+    )
     await assert.rejects(
       library.buildContextPack(target, "M001", {
         stage: "review",

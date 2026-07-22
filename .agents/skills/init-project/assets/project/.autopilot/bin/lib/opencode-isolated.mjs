@@ -1329,7 +1329,7 @@ async function prepareSterilePhase(project, {
     $schema: "https://opencode.ai/config.json", share: "disabled", snapshot: false,
     autoupdate: false, plugin: [], instructions: [],
     compaction: { auto: true, prune: true, tail_turns: 2 },
-    tool_output: { max_lines: 300, max_bytes: 32768 }, mcp: selectedMcp,
+    tool_output: { max_lines: 200, max_bytes: 16384 }, mcp: selectedMcp,
     ...(settings.model ? { model: settings.model } : {}),
   };
   const environment = {
@@ -1377,10 +1377,6 @@ export async function runFreshOpenCode(project, prompt, {
   const preflight = await preflightFreshOpenCode(project, { phase, taskId, baseline });
   assertPhasePromptHasNoSecrets(prompt, preflight.secrets, `OpenCode ${phase}`);
   const agent = preflight.agentName;
-  const argv = [...preflight.openCodeCommand, "--pure", "run", "--dir", project.root, "--agent", agent, "--format", "json", "--title", `autopilot ${phase} ${taskId ?? "project"} a${attempt}`];
-  if (settings.auto_approve) argv.push("--auto");
-  argv.push(prompt);
-
   const sterile = await prepareSterilePhase(project, {
     phase,
     taskId,
@@ -1388,6 +1384,13 @@ export async function runFreshOpenCode(project, prompt, {
     baseline,
     ...preflight,
   });
+  // Keep OpenCode's project discovery in the sterile launch directory. The
+  // packet and role already contain the selected context, while custom tools
+  // are independently bound to policy.root. This prevents AGENTS.md and other
+  // project-wide instructions from being paid again in every isolated phase.
+  const argv = [...preflight.openCodeCommand, "--pure", "run", "--dir", sterile.cwd, "--agent", agent, "--format", "json", "--title", `autopilot ${phase} ${taskId ?? "project"} a${attempt}`];
+  if (settings.auto_approve) argv.push("--auto");
+  argv.push(prompt);
   const phaseSecrets = [...new Set(
     sterile.secrets.filter((value) => typeof value === "string" && value.length >= 4),
   )];

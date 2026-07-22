@@ -49,9 +49,14 @@ if (process.argv.includes("--help")) {
 
 const arguments_ = process.argv.slice(2)
 const directoryIndex = arguments_.indexOf("--dir")
-const root = directoryIndex >= 0 && arguments_[directoryIndex + 1]
+const openCodeRoot = directoryIndex >= 0 && arguments_[directoryIndex + 1]
   ? path.resolve(arguments_[directoryIndex + 1])
   : process.cwd()
+let root = openCodeRoot
+try {
+  const policy = JSON.parse(Buffer.from(process.env.AUTOPILOT_TOOL_POLICY ?? "", "base64").toString("utf8"))
+  if (path.isAbsolute(policy.root ?? "")) root = path.resolve(policy.root)
+} catch {}
 const prompt = process.argv.at(-1) ?? ""
 const stage = /^Stage:\s*(\S+)/m.exec(prompt)?.[1] ?? "unknown"
 const taskId = /^Task:\s*(\S+)/m.exec(prompt)?.[1] ?? "unknown"
@@ -118,9 +123,14 @@ if (process.argv.includes("--help")) {
 
 const arguments_ = process.argv.slice(2)
 const directoryIndex = arguments_.indexOf("--dir")
-const root = directoryIndex >= 0 && arguments_[directoryIndex + 1]
+const openCodeRoot = directoryIndex >= 0 && arguments_[directoryIndex + 1]
   ? path.resolve(arguments_[directoryIndex + 1])
   : process.cwd()
+let root = openCodeRoot
+try {
+  const policy = JSON.parse(Buffer.from(process.env.AUTOPILOT_TOOL_POLICY ?? "", "base64").toString("utf8"))
+  if (path.isAbsolute(policy.root ?? "")) root = path.resolve(policy.root)
+} catch {}
 const prompt = process.argv.at(-1) ?? ""
 const stage = /^Stage:\s*(\S+)/m.exec(prompt)?.[1] ?? "unknown"
 const taskId = /^Task:\s*(\S+)/m.exec(prompt)?.[1] ?? "unknown"
@@ -185,9 +195,14 @@ if (process.argv.includes("--help")) {
 
 const arguments_ = process.argv.slice(2)
 const directoryIndex = arguments_.indexOf("--dir")
-const root = directoryIndex >= 0 && arguments_[directoryIndex + 1]
+const openCodeRoot = directoryIndex >= 0 && arguments_[directoryIndex + 1]
   ? path.resolve(arguments_[directoryIndex + 1])
   : process.cwd()
+let root = openCodeRoot
+try {
+  const policy = JSON.parse(Buffer.from(process.env.AUTOPILOT_TOOL_POLICY ?? "", "base64").toString("utf8"))
+  if (path.isAbsolute(policy.root ?? "")) root = path.resolve(policy.root)
+} catch {}
 const prompt = process.argv.at(-1) ?? ""
 const stage = /^Stage:\s*(\S+)/m.exec(prompt)?.[1] ?? "unknown"
 const taskId = /^Task:\s*(\S+)/m.exec(prompt)?.[1] ?? "unknown"

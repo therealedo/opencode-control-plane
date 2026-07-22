@@ -54,7 +54,12 @@ if (process.argv.includes("--help")) {
 
 const argv = process.argv.slice(2)
 const dirIndex = argv.indexOf("--dir")
-const root = dirIndex >= 0 ? path.resolve(argv[dirIndex + 1]) : process.cwd()
+const openCodeRoot = dirIndex >= 0 ? path.resolve(argv[dirIndex + 1]) : process.cwd()
+let root = openCodeRoot
+try {
+  const policy = JSON.parse(Buffer.from(process.env.AUTOPILOT_TOOL_POLICY ?? "", "base64").toString("utf8"))
+  if (path.isAbsolute(policy.root ?? "")) root = path.resolve(policy.root)
+} catch {}
 const runtime = path.join(root, ".autopilot", "runtime")
 const prompt = argv.at(-1) ?? ""
 const stage = /^Stage:\s*(\S+)/m.exec(prompt)?.[1] ?? "unknown"
@@ -159,7 +164,12 @@ if (process.argv.includes("--help")) {
 
 const phaseArgv = process.argv.slice(2)
 const phaseDirIndex = phaseArgv.indexOf("--dir")
-const root = phaseDirIndex >= 0 ? path.resolve(phaseArgv[phaseDirIndex + 1]) : process.cwd()
+const openCodeRoot = phaseDirIndex >= 0 ? path.resolve(phaseArgv[phaseDirIndex + 1]) : process.cwd()
+let root = openCodeRoot
+try {
+  const policy = JSON.parse(Buffer.from(process.env.AUTOPILOT_TOOL_POLICY ?? "", "base64").toString("utf8"))
+  if (path.isAbsolute(policy.root ?? "")) root = path.resolve(policy.root)
+} catch {}
 const runtime = path.join(root, ".autopilot", "runtime")
 const prompt = process.argv.at(-1) ?? ""
 const stage = /^Stage:\s*(\S+)/m.exec(prompt)?.[1] ?? "unknown"

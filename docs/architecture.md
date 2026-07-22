@@ -15,7 +15,11 @@ This reference explains the machinery behind the beginner workflow. It is not lo
 
 ## Autonomous loop
 
-The controller validates a clean Git baseline, selects one ready task, constructs a byte-bounded context packet, and starts a fresh OpenCode process. The process receives only its role, task, permitted paths, selected context, exact tools, and credential profile.
+The controller validates a clean Git baseline, selects one ready task, compiles a byte-bounded context packet, and starts a fresh OpenCode process. The process receives only its role, task, permitted paths, selected context, exact tools, and credential profile.
+
+Autonomous phases use a sterile OpenCode project directory. This prevents the manual/recovery `AGENTS.md` router and unrelated project discovery from being injected into every model call. Sandboxed custom tools still bind explicitly to the real project root, so path, Git, credential, and gate enforcement is unchanged.
+
+The context compiler operates only on selected generated `.project/` references. It removes exact known controller boilerplate already present in the higher-authority role, collapses redundant blank space, and preserves fenced code blocks verbatim. It never rewrites project memory or application files.
 
 The worker submits a typed candidate contract. The controller verifies changed paths and Git invariants, runs fixed gates, and starts a separate reviewer. Rejected work enters a fresh repair phase. Accepted work receives an application commit, metadata commit, and receipt before the next task is selected.
 
@@ -30,13 +34,16 @@ An ordinary pause may retain an active task, so it is not automatically safe for
 ## Token efficiency
 
 - Scripts scaffold and render known structures.
-- `AGENTS.md` is a small router, not a growing project encyclopedia.
+- `AGENTS.md` is a small manual/recovery router and is absent from isolated phase discovery.
 - Workers receive selected manifest bundles rather than every project file.
-- Tool output and context packets have byte caps.
+- Stable phase policy precedes task-specific packet data so compatible providers can reuse prompt prefixes.
+- Reads, lists, searches, tool output, context packets, summaries, findings, and recovery evidence have narrow defaults and hard byte caps with explicit pagination.
+- Repair evidence is projected by diagnostic priority into complete structured JSON; full raw evidence remains in artifacts.
+- Implementation follows a reuse-first ladder: no change when none is needed, existing project code, native platform features, installed dependencies, then the minimum new code. Independent review rejects unjustified additions while preserving security, validation, accessibility, data safety, readability, and all acceptance checks.
 - Receipts and archives remain durable but are excluded from prompt discovery.
 - The dashboard, controller, validation, Git transitions, gates, and upgrades do not call a model.
 
-OpenCode workers and interactive blueprint interviews still consume model tokens.
+OpenCode workers and interactive blueprint interviews still consume model tokens. Receipts retain provider-reported input, cache-read, output, reasoning, and cost data when available. Fixed packet-byte measurements are useful regression guards but are not equivalent to billed tokens; see [Token efficiency](token-efficiency.md).
 
 ## Fleet dashboard
 
@@ -56,4 +63,6 @@ While open, the fleet dashboard checks the fixed public GitHub release channel w
 - `scripts/install.mjs`: transactional global skills, commands, and launcher installation.
 - `scripts/upgrade.mjs`: global-first source validation and optional fleet upgrade entry point.
 - `.agents/skills/init-project/assets/project/`: version-owned project template copied by the scaffolder.
+- `.agents/skills/init-project/assets/project/.autopilot/bin/lib/context-compiler.mjs`: deterministic selected-reference compaction with protected fenced content.
+- `.agents/skills/init-project/assets/project/.autopilot/bin/lib/context-pack.mjs`: stable bounded phase-packet assembly and size reporting.
 - `tests/`: deterministic runtime, isolation, registry, dashboard, release, installer, evolution, and upgrade coverage.

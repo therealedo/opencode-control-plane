@@ -28,6 +28,11 @@ const RUN_STATUSES = new Set([
 const RISKS = new Set(["low", "medium", "high"]);
 const CONTRACT_TEXT_CAP = 2 * 1024;
 const CONTRACT_PATH_CAP = 512;
+const CONTRACT_SUMMARY_CAP = 512;
+const CONTRACT_FINDING_CAP = 768;
+const CONTRACT_BLOCKER_KIND_CAP = 128;
+const CONTRACT_BLOCKER_CAP = 1024;
+const CONTRACT_FINDINGS_CAP = 16;
 const CONTRACT_ARRAY_CAP = 256;
 const CONTRACT_OBJECT_CAP = 24 * 1024;
 const MAX_CONTEXT_BYTES = 16 * 1024;
@@ -876,7 +881,7 @@ export function validateCandidate(candidate, taskId, attempt) {
   if (candidate.task_id !== taskId) issue(issues, "candidate.task_id", `must equal ${taskId}`);
   if (candidate.attempt !== attempt) issue(issues, "candidate.attempt", `must equal ${attempt}`);
   if (!["complete", "blocked", "failed"].includes(candidate.status)) issue(issues, "candidate.status", "is invalid");
-  boundedString(issues, "candidate.summary", candidate.summary);
+  boundedString(issues, "candidate.summary", candidate.summary, { maxBytes: CONTRACT_SUMMARY_CAP });
   if (!stringArray(candidate.changed_files)) {
     issue(issues, "candidate.changed_files", "must be a string array");
   } else {
@@ -902,8 +907,9 @@ export function validateCandidate(candidate, taskId, attempt) {
     rejectUnknownKeys(issues, "candidate.blocker", candidate.blocker, [
       "kind", "message", "required_action", "resume_condition",
     ]);
-    for (const key of ["kind", "message", "required_action", "resume_condition"]) {
-      boundedString(issues, `candidate.blocker.${key}`, candidate.blocker?.[key]);
+    boundedString(issues, "candidate.blocker.kind", candidate.blocker?.kind, { maxBytes: CONTRACT_BLOCKER_KIND_CAP });
+    for (const key of ["message", "required_action", "resume_condition"]) {
+      boundedString(issues, `candidate.blocker.${key}`, candidate.blocker?.[key], { maxBytes: CONTRACT_BLOCKER_CAP });
     }
   } else if (candidate.blocker !== null) {
     issue(issues, "candidate.blocker", "must be null unless blocked");
@@ -926,17 +932,19 @@ export function validateReview(review, taskId) {
   if (review.schema_version !== 1) issue(issues, "review", "schema_version must be 1");
   if (review.task_id !== taskId) issue(issues, "review.task_id", `must equal ${taskId}`);
   if (!["approved", "changes_requested", "blocked"].includes(review.status)) issue(issues, "review.status", "is invalid");
-  boundedString(issues, "review.summary", review.summary);
+  boundedString(issues, "review.summary", review.summary, { maxBytes: CONTRACT_SUMMARY_CAP });
   const findings = Array.isArray(review.findings) ? review.findings : [];
   if (!Array.isArray(review.findings)) issue(issues, "review.findings", "must be an array");
-  if (findings.length > 64) issue(issues, "review.findings", "exceeds 64 entries");
+  if (findings.length > CONTRACT_FINDINGS_CAP) issue(issues, "review.findings", `exceeds ${CONTRACT_FINDINGS_CAP} entries`);
   for (const [index, finding] of findings.entries()) {
     if (!object(finding) || !["low", "medium", "high", "critical"].includes(finding.severity)) issue(issues, `review.findings.${index}.severity`, "is invalid");
     rejectUnknownKeys(issues, `review.findings.${index}`, finding, ["severity", "file", "message"]);
     boundedString(issues, `review.findings.${index}.file`, finding?.file, {
       maxBytes: CONTRACT_PATH_CAP,
     });
-    boundedString(issues, `review.findings.${index}.message`, finding?.message);
+    boundedString(issues, `review.findings.${index}.message`, finding?.message, {
+      maxBytes: CONTRACT_FINDING_CAP,
+    });
   }
   if (
     review.status === "approved" &&

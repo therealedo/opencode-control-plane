@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "release": "v1.1.0",
+  "commit": "7423f3181ed802d283bcba28e91a02728d13f81a",
+  "fixture": "insurance-blueprint-v1.json",
+  "measurement": "UTF-8 bytes in phase role body, static packet, and project AGENTS.md when loaded",
+  "execute_bytes": 10426,
+  "repair_bytes": 10053,
+  "review_bytes": 7437,
+  "total_bytes": 27916
+}
