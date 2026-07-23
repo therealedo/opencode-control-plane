@@ -134,6 +134,7 @@ npm run upgrade -- --local --all-projects
 
 More detail:
 
+- [Product roadmap](roadmap.md)
 - [Architecture and context lifecycle](docs/architecture.md)
 - [Token-efficiency design and measurements](docs/token-efficiency.md)
 - [Blueprint initialization and evolution](docs/blueprints.md)
