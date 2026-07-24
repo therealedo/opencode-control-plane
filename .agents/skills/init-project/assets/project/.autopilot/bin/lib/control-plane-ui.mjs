@@ -4,6 +4,7 @@ const CONTROL_PATTERN = /[\x00-\x1f\x7f-\x9f]/g;
 export const ACTION_IDS = Object.freeze([
   "run",
   "preflight",
+  "reasoning",
   "change",
   "upgrade",
   "stop",
@@ -50,12 +51,14 @@ export function primaryAction(status = {}) {
   return { id: "start", label: "Start worker", enabled: true, confirm: false };
 }
 
-export function actionMenu(status = {}) {
+export function actionMenu(status = {}, metadata = {}) {
   const primary = primaryAction(status);
   const live = Boolean(status.controller_lock);
+  const variant = safeText(metadata.runtime_variant ?? "default", 64);
   return [
     { menu_id: "run", ...primary },
     { menu_id: "preflight", id: "preflight", label: "Check readiness (zero tokens)", enabled: !live, confirm: false },
+    { menu_id: "reasoning", id: "reasoning", label: `Worker reasoning: ${variant} (change)`, enabled: !live, confirm: false },
     { menu_id: "change", id: "change", label: "Change product blueprint", enabled: true, confirm: true },
     { menu_id: "upgrade", id: "upgrade", label: "Upgrade Control Plane", enabled: true, confirm: true },
     { menu_id: "stop", id: "stop", label: "Stop safely", enabled: live, confirm: true },
@@ -102,7 +105,7 @@ export function renderDashboard({ status = {}, metadata = {}, activity = [], mes
   const usable = Math.max(48, Math.min(120, Number(width) || 88));
   const mode = controllerMode(status);
   const taskProgress = progress(status);
-  const menu = actionMenu(status);
+  const menu = actionMenu(status, metadata);
   const line = "-".repeat(usable);
   const output = [
     "OpenCode Control Plane",
@@ -115,6 +118,7 @@ export function renderDashboard({ status = {}, metadata = {}, activity = [], mes
     pair("Progress", `${taskProgress.done}/${taskProgress.total} tasks (${taskProgress.percent}%)`, usable),
     pair("Attempt", status.active_task ? `${Number(status.attempt ?? 0)}${status.active_task_attempt_limit ? `/${Number(status.active_task_attempt_limit)}` : ""}` : "-", usable),
     pair("Blueprint", metadata.blueprint_version ? `v${metadata.blueprint_version}` : "Not finalized", usable),
+    pair("Reasoning", safeText(metadata.runtime_variant ?? "default", 64), usable),
     pair("Control Plane", `${safeText(metadata.installed_version ?? "legacy", 30)}${metadata.available_version && metadata.available_version !== metadata.installed_version ? ` -> ${safeText(metadata.available_version, 30)} available` : ""}`, usable),
   ];
 

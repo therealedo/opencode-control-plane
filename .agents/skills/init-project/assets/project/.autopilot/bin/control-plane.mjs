@@ -14,6 +14,12 @@ import {
   statusFingerprint,
 } from "./lib/control-plane-ui.mjs";
 import { findProjectRoot } from "./lib/core.mjs";
+import {
+  nextRuntimeVariant,
+  readRuntimeSettings,
+  runtimeVariantLabel,
+  writeRuntimeVariant,
+} from "./lib/runtime-settings.mjs";
 
 const POLL_MS = 1000;
 const OUTPUT_CAP = 1024 * 1024;
@@ -46,7 +52,7 @@ async function main() {
   const root = await findProjectRoot(options.root ? path.resolve(options.root) : process.cwd());
   if (options.snapshot || !process.stdin.isTTY || !process.stdout.isTTY) {
     const [status, metadata] = await Promise.all([readStatus(root), readMetadata(root)]);
-    if (options.json) process.stdout.write(`${JSON.stringify({ status, metadata, actions: actionMenu(status) }, null, 2)}\n`);
+    if (options.json) process.stdout.write(`${JSON.stringify({ status, metadata, actions: actionMenu(status, metadata) }, null, 2)}\n`);
     else process.stdout.write(`${renderDashboard({ status, metadata, width: process.stdout.columns ?? 88 })}\n`);
     return;
   }
@@ -162,6 +168,10 @@ async function interactive(root) {
       } else if (menuAction.id === "preflight") {
         const result = await invokeController(root, "preflight");
         model.message = result.value?.ready ? "Ready: every deterministic preflight check passed." : firstPreflightProblem(result.value);
+      } else if (menuAction.id === "reasoning") {
+        const current = await readRuntimeSettings(root);
+        const updated = await writeRuntimeVariant(root, nextRuntimeVariant(current.variant));
+        model.message = `Worker reasoning set to ${runtimeVariantLabel(updated.variant)}. It applies to the next fresh worker session.`;
       } else if (menuAction.id === "change") {
         await drainToMaintenance(root, model, draw, refresh);
         model.message = "Opening the targeted blueprint-change interview...";
@@ -210,11 +220,11 @@ async function interactive(root) {
       return;
     }
     if (model.busy) return;
-    const menu = actionMenu(model.status);
+    const menu = actionMenu(model.status, model.metadata);
     if (key.name === "up") model.selected = (model.selected + menu.length - 1) % menu.length;
     else if (key.name === "down") model.selected = (model.selected + 1) % menu.length;
     else if (key.name === "return") void perform(menu[model.selected]);
-    else if (/^[1-7]$/.test(key.sequence ?? "")) {
+    else if (/^[1-8]$/.test(key.sequence ?? "")) {
       model.selected = Number(key.sequence) - 1;
       void perform(menu[model.selected]);
     } else if (key.name === "q") void perform(menu.find((item) => item.menu_id === "quit"));
@@ -265,6 +275,12 @@ async function readStatus(root) {
 
 async function readMetadata(root) {
   const metadata = {};
+  try {
+    const settings = await readRuntimeSettings(root);
+    metadata.runtime_variant = runtimeVariantLabel(settings.variant);
+  } catch {
+    metadata.runtime_variant = "invalid";
+  }
   try {
     const manifest = parseJson(await readFile(path.join(root, ".autopilot", "control-plane.json"), "utf8"), "Control Plane manifest");
     metadata.installed_version = manifest.version;

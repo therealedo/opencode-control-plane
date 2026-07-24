@@ -56,6 +56,7 @@ const GATE_RUNNER_SNAPSHOT = Object.freeze([
   "lib/mcp.mjs",
   "lib/process.mjs",
   "lib/project.mjs",
+  "lib/runtime-settings.mjs",
   "lib/secrets.mjs",
   "lib/state.mjs",
   "lib/tool-grants.mjs",
@@ -1390,6 +1391,7 @@ export async function runFreshOpenCode(project, prompt, {
   // project-wide instructions from being paid again in every isolated phase.
   const argv = [...preflight.openCodeCommand, "--pure", "run", "--dir", sterile.cwd, "--agent", agent, "--format", "json", "--title", `autopilot ${phase} ${taskId ?? "project"} a${attempt}`];
   if (settings.auto_approve) argv.push("--auto");
+  if (settings.variant) argv.push("--variant", settings.variant);
   argv.push(prompt);
   const phaseSecrets = [...new Set(
     sterile.secrets.filter((value) => typeof value === "string" && value.length >= 4),

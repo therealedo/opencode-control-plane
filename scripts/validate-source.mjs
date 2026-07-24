@@ -459,7 +459,8 @@ if (!(await exists(readmePath))) {
     "./control-plane",
     "Change product blueprint",
     "Update everything",
-    "worker is already running",
+    "Worker reasoning",
+    "Start worker",
     "GitHub Release",
   ]) {
     if (!readme.includes(required)) errors.push(`README.md is missing beginner contract text: ${required}`)

@@ -34,9 +34,9 @@ If setup says the command folder is not on your PATH, add the exact folder it pr
 4. Answer the interview. You can paste an existing project brief or chat first and ask it to question only missing or ambiguous areas.
 5. Give environment-variable names, never secret values.
 
-When the interview is complete, deterministic scripts create the modular project files, Blueprint v1, tests and worker configuration, commit a clean baseline, register the project in the dashboard, check readiness, and start the worker automatically when ready.
+When the interview is complete, deterministic scripts create the modular project files, Blueprint v1, tests and worker configuration, commit a clean baseline, register the project, and check readiness. They deliberately stop before the first worker starts.
 
-You do **not** press Start after a successful ready initialization—the worker is already running.
+Open `control-plane` in another terminal, select the project, choose **Worker reasoning** until the desired model variant is shown, then choose **Start worker**. This setting applies to every fresh autonomous worker; changing `/variants` in the interview session alone does not carry into those isolated sessions.
 
 ## Monitor every project
 
@@ -56,7 +56,7 @@ The first screen shows all registered projects, which workers are running, progr
 - U updates the Control Plane and registered projects safely.
 - Q closes only the dashboard; workers keep running.
 
-Inside a project you can check readiness, pause, stop, resume, update its blueprint, or return to the wide view. The old project-local `control-plane.cmd` or `./control-plane` launcher remains available as a fallback.
+Inside a project you can set worker reasoning, check readiness, start, pause, stop, resume, update its blueprint, or return to the wide view. Pause first if you want to change reasoning while a project is already running. The old project-local `control-plane.cmd` or `./control-plane` launcher remains available as a fallback.
 
 The dashboard runs only while its terminal is open. There is no server, daemon, browser UI, database, or background model session.
 

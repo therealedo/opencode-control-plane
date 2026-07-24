@@ -38,9 +38,9 @@ The system should retain three clearly separated layers:
 
 Blueprint and migration history belong to the cold planning path. They must not be repeatedly loaded into the autonomous execution path.
 
-## Current baseline: v1.2
+## Current baseline: v1.3
 
-Version 1.2 already provides:
+Version 1.3 already provides:
 
 - modular, evolving blueprints;
 - deterministic scaffolding and upgrades;
@@ -50,6 +50,8 @@ Version 1.2 already provides:
 - durable Git, state, receipt, and recovery evidence;
 - a global terminal dashboard;
 - measured reduction of framework-owned fixed prompt bytes.
+- a pre-launch checkpoint and token-free dashboard control for provider reasoning variants;
+- automatic upgrade of an older in-progress initialization scaffold before its first worker starts.
 
 The current measurement is a regression guard, not proof of end-to-end token savings or unchanged implementation quality. The next release must address that evidence gap before pursuing more prompt compression.
 
@@ -78,9 +80,17 @@ Exit criteria:
 
 **Goal:** let projects change models and operating policy safely without changing product intent.
 
-Planned outcomes:
+**Status:** in progress. Version 1.3 shipped the first vertical slice:
 
-- Move model selection, reasoning effort, cost limits, and similar runtime choices out of the immutable product contract.
+- initialization now stops at an explicit ready checkpoint before the first worker;
+- the terminal dashboard changes provider reasoning variants without a model call or blueprint revision;
+- the selected variant is injected into every fresh isolated worker phase;
+- an interview started on v1.2 upgrades its finalized scaffold automatically and preserves all answers before pausing;
+- the runtime setting is project-local, ignored by Git, disabled while a worker is live, and reversible to the provider default.
+
+Remaining outcomes:
+
+- Move model selection, cost limits, and the remaining runtime choices out of the product contract.
 - Keep a project default while allowing safe global or phase-specific overrides.
 - Allow model changes from the terminal dashboard at a maintenance boundary.
 - Do not create a new blueprint version merely because a model changed.

@@ -45,6 +45,8 @@ Run once:
 node <skill-directory>/bin/finalize-and-launch.mjs --target <project-root> --json
 ```
 
-It deterministically renders Blueprint v1 and project memory, records ownership/version, validates packets, commits the baseline, removes drafts, registers the project, preflights, and starts the detached controller when ready. Configure missing Git identity and rerun. On success report the PID and `control-plane`; do not ask the user to start it again. If `ready: false`, report only named provisioning failures; leave it idle for dashboard readiness/start. Registration failure is nonfatal and can be fixed from the dashboard.
+It deterministically renders Blueprint v1 and project memory, records ownership/version, validates packets, commits the baseline, removes drafts, registers the project, upgrades an older interview scaffold when needed, and preflights without starting a worker. Configure missing Git identity and rerun. On success tell the user to open `control-plane`, choose **Worker reasoning** if desired, and select **Start worker**. This deliberate zero-token checkpoint lets runtime reasoning change without changing the blueprint or losing interview answers. If `ready: false`, report only named provisioning failures; leave it idle for dashboard readiness/start. Registration failure is nonfatal and can be fixed from the dashboard.
+
+Only pass `--variant <id> --start` when the user explicitly selected that provider variant and explicitly asked for immediate launch. A `/variants` choice in the interview session is not inherited by isolated workers unless it is saved through this argument or the dashboard.
 
 Use other zero-model scripts only for diagnosis.

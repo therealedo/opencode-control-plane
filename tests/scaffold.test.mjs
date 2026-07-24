@@ -1566,10 +1566,28 @@ test("single initialization closeout returns only failed provisioning checks whe
       windowsHide: true,
     }).status, 0)
 
+    const legacyOwnershipFile = path.join(target, ".autopilot", "control-plane.json")
+    const legacyOwnership = JSON.parse(await readFile(legacyOwnershipFile, "utf8"))
+    legacyOwnership.version = "1.2.0"
+    await writeFile(legacyOwnershipFile, `${JSON.stringify(legacyOwnership, null, 2)}\n`, "utf8")
+    assert.equal(spawnSync("git", ["add", ".autopilot/control-plane.json"], {
+      cwd: target,
+      encoding: "utf8",
+      windowsHide: true,
+    }).status, 0)
+    assert.equal(spawnSync("git", ["commit", "-m", "test: emulate in-progress v1.2 interview"], {
+      cwd: target,
+      encoding: "utf8",
+      windowsHide: true,
+    }).status, 0)
+
     const closeout = runNode(closeoutScript, ["--target", target, "--json"], target)
     assert.equal(closeout.status, 0, closeout.stderr)
     const output = JSON.parse(closeout.stdout)
     assert.equal(output.ready, false)
+    assert.equal(output.upgrade.from_version, "1.2.0")
+    assert.equal(output.upgrade.to_version, "1.3.0")
+    assert.equal(output.upgrade.changed, true)
     assert.equal(output.started, null)
     assert.ok(output.provisioning.some((item) => item.kind === "opencode"))
     assert.equal(Object.hasOwn(output, "preflight"), false)
@@ -1638,7 +1656,24 @@ else { process.stderr.write("unexpected closeout verb\\n"); process.exitCode = 2
     const nestedAuthSecret = "closeout-auth-\"quoted\"\\path-1953"
     const authContent = JSON.stringify({ test: { key: nestedAuthSecret } })
     const xdgDataHome = path.join(target, "custom-opencode-data")
-    const readyCloseout = runNode(closeoutScript, ["--target", target, "--json"], target, {
+    const pausedCloseout = runNode(closeoutScript, ["--target", target, "--json"], target, {
+      env: {
+        ...process.env,
+        PROVIDER_REGION: providerRegion,
+        PROVIDER_TOKEN: providerToken,
+        OPENCODE_AUTH_CONTENT: authContent,
+        XDG_DATA_HOME: xdgDataHome,
+      },
+      timeout: 120_000,
+    })
+    assert.equal(pausedCloseout.status, 0, pausedCloseout.stderr)
+    const pausedOutput = JSON.parse(pausedCloseout.stdout)
+    assert.equal(pausedOutput.ready, true)
+    assert.equal(pausedOutput.started, null)
+    assert.equal(pausedOutput.launch_confirmation_required, true)
+    await assert.rejects(access(path.join(target, ".autopilot", "runtime", "closeout-start-environment.json")))
+
+    const readyCloseout = runNode(closeoutScript, ["--target", target, "--variant", "high", "--start", "--json"], target, {
       env: {
         ...process.env,
         PROVIDER_REGION: providerRegion,
@@ -1655,6 +1690,11 @@ else { process.stderr.write("unexpected closeout verb\\n"); process.exitCode = 2
     assert.equal(readyCloseout.status, 0, readyCloseout.stderr)
     const readyOutput = JSON.parse(readyCloseout.stdout)
     assert.equal(readyOutput.ready, true)
+    assert.equal(readyOutput.runtime_variant, "high")
+    assert.deepEqual(JSON.parse(await readFile(path.join(target, ".autopilot", "runtime", "settings.json"), "utf8")), {
+      schema_version: 1,
+      variant: "high",
+    })
     detachedProbePid = readyOutput.started.pid
     assert.equal(
       readyOutput.started.log,

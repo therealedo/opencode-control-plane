@@ -21,6 +21,11 @@ import {
   sanitizeProcessResult,
 } from "../assets/project/.autopilot/bin/lib/process.mjs"
 import { exactSecretVariants } from "../assets/project/.autopilot/bin/lib/secrets.mjs"
+import {
+  readRuntimeSettings,
+  runtimeVariantLabel,
+  writeRuntimeVariant,
+} from "../assets/project/.autopilot/bin/lib/runtime-settings.mjs"
 import { registerProject } from "./lib/project-registry.mjs"
 
 const FINALIZE_TIMEOUT_MS = 10 * 60 * 1000
@@ -37,6 +42,7 @@ const args = parseArgs(process.argv.slice(2))
 const target = path.resolve(args.target ?? process.cwd())
 const skillDirectory = path.dirname(fileURLToPath(import.meta.url))
 const finalizer = path.join(skillDirectory, "finalize.mjs")
+const upgrader = path.join(skillDirectory, "upgrade-project.mjs")
 const controller = path.join(target, ".autopilot", "bin", "autopilot.mjs")
 
 const finalized = await runJson(
@@ -46,6 +52,10 @@ const finalized = await runJson(
   "Project finalization",
   { timeoutMs: FINALIZE_TIMEOUT_MS, env: baseChildEnvironment() },
 )
+const upgrade = await upgradeFinalizedProject(target)
+const runtimeSettings = args.variant === undefined
+  ? await readRuntimeSettings(target)
+  : await writeRuntimeVariant(target, args.variant)
 const registration = await registerFinalizedProject(target)
 const controllerChild = await controllerChildContext(target)
 const preflight = await runJson(
@@ -66,10 +76,28 @@ if (!preflight.ready) {
     ok: true,
     target,
     baseline_commit: finalized.baseline_commit ?? null,
+    upgrade,
+    runtime_variant: runtimeVariantLabel(runtimeSettings?.variant),
     registration,
     ready: false,
     started: null,
     provisioning: failedChecks(preflight),
+  }, null, args.json ? 0 : 2)}\n`)
+  process.exit(0)
+}
+
+if (!args.start) {
+  process.stdout.write(`${JSON.stringify({
+    ok: true,
+    target,
+    baseline_commit: finalized.baseline_commit ?? null,
+    upgrade,
+    runtime_variant: runtimeVariantLabel(runtimeSettings?.variant),
+    registration,
+    ready: true,
+    started: null,
+    launch_confirmation_required: true,
+    next_action: "Open the Control Plane dashboard, choose Worker reasoning if desired, then select Start worker.",
   }, null, args.json ? 0 : 2)}\n`)
   process.exit(0)
 }
@@ -90,6 +118,8 @@ process.stdout.write(`${JSON.stringify({
   ok: true,
   target,
   baseline_commit: finalized.baseline_commit ?? null,
+  upgrade,
+  runtime_variant: runtimeVariantLabel(runtimeSettings?.variant),
   registration,
   ready: true,
   started: {
@@ -97,6 +127,25 @@ process.stdout.write(`${JSON.stringify({
     log: started.log ?? null,
   },
 }, null, args.json ? 0 : 2)}\n`)
+
+async function upgradeFinalizedProject(root) {
+  const release = await readJson(path.join(skillDirectory, "..", "assets", "control-plane-release.json"), {
+    maxBytes: CONFIG_BYTES,
+  })
+  const installed = await readJson(path.join(root, ".autopilot", "control-plane.json"), {
+    maxBytes: CONFIG_BYTES,
+  })
+  if (installed.version === release.version) {
+    return { changed: false, from_version: installed.version, to_version: release.version }
+  }
+  return runJson(
+    process.execPath,
+    [upgrader, "--target", root, "--source-skill", path.join(skillDirectory, ".."), "--json"],
+    root,
+    "Control Plane project upgrade",
+    { timeoutMs: FINALIZE_TIMEOUT_MS, env: baseChildEnvironment() },
+  )
+}
 
 async function registerFinalizedProject(root) {
   const explicitHome = process.env.OPENCODE_CONTROL_PLANE_HOME
@@ -286,7 +335,7 @@ function boundedDiagnostic(value, secretValues = []) {
 }
 
 function parseArgs(argv) {
-  const result = { target: undefined, json: false }
+  const result = { target: undefined, json: false, start: false, variant: undefined }
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index]
     if (value === "--target") {
@@ -294,8 +343,14 @@ function parseArgs(argv) {
       if (!target || target.startsWith("--")) throw new Error("--target requires a path")
       result.target = target
     } else if (value === "--json") result.json = true
+    else if (value === "--start") result.start = true
+    else if (value === "--variant") {
+      const variant = argv[++index]
+      if (!variant || variant.startsWith("--")) throw new Error("--variant requires default or a provider variant ID")
+      result.variant = variant
+    }
     else if (value === "--help") {
-      process.stdout.write("Usage: finalize-and-launch.mjs [--target PATH] [--json]\n")
+      process.stdout.write("Usage: finalize-and-launch.mjs [--target PATH] [--variant ID|default] [--start] [--json]\n")
       process.exit(0)
     } else throw new Error(`Unknown argument: ${value}`)
   }

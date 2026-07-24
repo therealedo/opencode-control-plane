@@ -9,6 +9,7 @@ import {
   resolveInside,
 } from "./core.mjs";
 import { initialState } from "./state.mjs";
+import { readRuntimeSettings } from "./runtime-settings.mjs";
 
 export const DEFAULT_PATHS = Object.freeze({
   config: ".autopilot/config.json",
@@ -40,6 +41,8 @@ const JSON_CAPS = Object.freeze({
 export async function loadProject(root) {
   const configFile = resolveInside(root, DEFAULT_PATHS.config, "config path");
   const config = await readJson(configFile, { maxBytes: JSON_CAPS.config });
+  const runtimeSettings = await readRuntimeSettings(root);
+  config.opencode = { ...config.opencode, variant: runtimeSettings.variant };
   const relative = { ...DEFAULT_PATHS };
   const absolute = Object.fromEntries(
     Object.entries(relative).map(([key, value]) => [

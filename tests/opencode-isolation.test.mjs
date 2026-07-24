@@ -210,6 +210,7 @@ catch (error) { if (error?.code !== "ENOENT") throw error }
 let feedbackRunnerExercised = false
 observations.push({
   stage,
+  reasoning_variant: argv.includes("--variant") ? argv[argv.indexOf("--variant") + 1] : null,
   selected_server: expectedServer,
   variable: expectedVariable,
   secret_sha256: createHash("sha256").update(secret).digest("hex"),
@@ -1445,6 +1446,10 @@ test("fresh launcher records bounded model usage and ignores malformed or duplic
 test("fresh phases use pure sterile profiles and file-substituted MCP credentials", async (t) => {
   const root = await createScaffold(t, { ready: true })
   await configureIsolationProject(t, root)
+  await writeJson(path.join(root, ".autopilot", "runtime", "settings.json"), {
+    schema_version: 1,
+    variant: "high",
+  })
   const dotenvSentinel = "project-dotenv-must-not-autoload-314159"
   await writeFile(
     path.join(root, ".env.local"),
@@ -1484,6 +1489,7 @@ test("fresh phases use pure sterile profiles and file-substituted MCP credential
     createHash("sha256").update("review-phase-secret-123456").digest("hex"),
   )
   for (const item of observations) {
+    assert.equal(item.reasoning_variant, "high")
     assert.equal(item.pure_argv, true)
     assert.equal(item.tool_usage_enabled, true)
     assert.equal(item.launch_cwd_is_sterile, true)

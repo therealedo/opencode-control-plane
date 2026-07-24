@@ -189,6 +189,10 @@ export function validateConfig(config) {
   ) {
     issue(issues, "config.opencode.model", "must be one fixed provider/model identifier");
   }
+  if (
+    config.opencode?.variant !== null && config.opencode?.variant !== undefined &&
+    (typeof config.opencode.variant !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(config.opencode.variant))
+  ) issue(issues, "config.opencode.variant", "must be null or one safe provider reasoning variant ID");
   const providerAuthMode = config.opencode?.provider_auth_mode;
   if (!["auth_file", "environment", "none"].includes(providerAuthMode)) {
     issue(issues, "config.opencode.provider_auth_mode", "must be auth_file, environment, or none");
