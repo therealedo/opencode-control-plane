@@ -1,6 +1,6 @@
 {
   "name": "opencode-control-plane",
-  "version": "1.4.0",
+  "version": "1.4.5",
   "private": true,
   "type": "module",
   "description": "A high-efficiency, zero-token orchestrator that turns OpenCode into a sandboxed, self-verifying coding worker.",

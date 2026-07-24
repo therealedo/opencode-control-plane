@@ -38,9 +38,9 @@ The system should retain three clearly separated layers:
 
 Blueprint and migration history belong to the cold planning path. They must not be repeatedly loaded into the autonomous execution path.
 
-## Current baseline: v1.4
+## Current baseline: v1.4.5
 
-Version 1.4 already provides:
+Version 1.4.5 already provides:
 
 - modular, evolving blueprints;
 - deterministic scaffolding and upgrades;
@@ -53,6 +53,7 @@ Version 1.4 already provides:
 - a pre-launch checkpoint and token-free dashboard control for provider reasoning variants;
 - automatic upgrade of an older in-progress initialization scaffold before its first worker starts.
 - a visible arrow-selectable global action menu while retaining direct keyboard shortcuts;
+- a high-contrast, color-aware selector with visible horizontal and vertical navigation cues;
 - a dependency-free, live folder-suggestion picker for adding initialized projects without memorizing paths;
 - stricter skill wording that reserves human stops for genuinely human-resolvable boundaries.
 

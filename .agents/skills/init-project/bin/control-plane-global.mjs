@@ -29,6 +29,7 @@ import {
   nextFleetAction,
   projectSummary,
   renderFleet,
+  terminalColorEnabled,
 } from "./lib/global-control-plane-ui.mjs";
 import { pickProjectDirectory } from "./lib/directory-picker.mjs";
 
@@ -64,6 +65,7 @@ async function main() {
 }
 
 async function interactive(home, initialInstallation) {
+  const useColor = terminalColorEnabled({ isTTY: process.stdout.isTTY, env: process.env });
   const model = {
     installation: initialInstallation,
     projects: [],
@@ -108,6 +110,7 @@ async function interactive(home, initialInstallation) {
       selectedAction: model.selectedAction,
       message: model.confirm?.text ?? model.message,
       busy: model.busy,
+      color: useColor,
       width: process.stdout.columns ?? 100,
       height: Math.max(1, (process.stdout.rows ?? 30) - (model.confirm ? 1 : 0)),
     });

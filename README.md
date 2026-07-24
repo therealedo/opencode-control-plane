@@ -48,7 +48,7 @@ control-plane
 
 The first screen shows all registered projects, which workers are running, progress, blueprint versions, problems, and available framework updates.
 
-- Up/Down selects a project; Left/Right selects a visible action; Enter runs it. Letter shortcuts still work.
+- Up/Down selects a project; Left/Right selects a visible action; Enter runs it. The active project and option are highlighted in color, with visible arrow hints. Letter shortcuts still work.
 - O or **Open project** opens that project's full controls. It is highlighted by default when a project is available, so Enter opens it immediately.
 - A or **Add project** opens an in-terminal folder picker. Type to see matching next folders, use Up/Down to choose, Right/Tab to browse into the selected folder, Left to go back, and Enter to validate and add the highlighted folder.
 - F forgets a missing or unwanted entry; it never deletes the project.

@@ -30,6 +30,12 @@ export function nextFleetAction(actions, selected, direction) {
   return Math.max(0, Math.min(selected, actions.length - 1));
 }
 
+export function terminalColorEnabled({ isTTY = false, env = process.env } = {}) {
+  if (Object.hasOwn(env, "NO_COLOR") || env.FORCE_COLOR === "0" || env.TERM === "dumb") return false;
+  if (Object.hasOwn(env, "FORCE_COLOR")) return true;
+  return Boolean(isTTY);
+}
+
 export function renderFleet({
   projects = [],
   installedVersion = "unknown",
@@ -38,6 +44,7 @@ export function renderFleet({
   selectedAction = 0,
   message = "",
   busy = false,
+  color = false,
   width = 100,
   height = 30,
 } = {}) {
@@ -47,7 +54,7 @@ export function renderFleet({
   const running = projects.filter((item) => item.mode?.id === "running").length;
   const attention = projects.filter((item) => !item.available || ["failed", "human_required", "interrupted"].includes(item.mode?.id)).length;
   const actions = fleetActionMenu(projects[selected] ?? null);
-  const actionLines = busy ? [] : renderActionStrip(actions, selectedAction, usable);
+  const actionLines = busy ? [] : renderActionStrip(actions, selectedAction, usable, color);
   const reservedRows = 14 + actionLines.length + (message ? 2 : 0);
   const visibleProjectRows = Math.max(0, Math.floor(Number(height) || 30) - reservedRows);
   const output = [
@@ -63,24 +70,26 @@ export function renderFleet({
   if (projects.length === 0) {
     output.push("No initialized projects are registered yet.", "Finish /init-project, or press A to add an existing project.");
   } else {
-    output.push(fit(`${" ".padEnd(2)}${"Project".padEnd(28)} ${"State".padEnd(18)} ${"Progress".padEnd(12)} ${"Blueprint".padEnd(10)} Version`, usable));
-    output.push(fit(`${" ".padEnd(2)}${"-".repeat(27)}  ${"-".repeat(17)}  ${"-".repeat(11)}  ${"-".repeat(9)}  ${"-".repeat(10)}`, usable));
+    output.push(fit(`${"↑/↓".padEnd(4)}${"Project".padEnd(26)} ${"State".padEnd(18)} ${"Progress".padEnd(12)} ${"Blueprint".padEnd(10)} Version`, usable));
+    output.push(fit(`${"-".repeat(3).padEnd(4)}${"-".repeat(25)}  ${"-".repeat(17)}  ${"-".repeat(11)}  ${"-".repeat(9)}  ${"-".repeat(10)}`, usable));
     const rows = Math.min(projects.length, visibleProjectRows);
     const start = Math.max(0, Math.min(selected - Math.floor(rows / 2), Math.max(0, projects.length - rows)));
     for (let index = start; index < Math.min(projects.length, start + rows); index += 1) {
       const item = projects[index];
-      const marker = index === selected ? ">" : " ";
+      const isSelected = index === selected;
+      const marker = isSelected ? "▶" : " ";
       const state = item.available ? item.mode.label : "Unavailable";
       const taskProgress = item.available ? progress(item.status) : { done: 0, total: 0, percent: 0 };
       const progressText = item.available ? `${taskProgress.done}/${taskProgress.total} (${taskProgress.percent}%)` : "-";
       const blueprint = item.blueprint_version ? `v${item.blueprint_version}` : "-";
       const version = item.control_plane_version ?? (item.available ? "legacy" : "-");
-      output.push(fit(`${marker} ${fitCell(item.name, 28)} ${fitCell(state, 18)} ${fitCell(progressText, 12)} ${fitCell(blueprint, 10)} ${version}`, usable));
+      const row = fit(`${marker} ${fitCell(item.name, 28)} ${fitCell(state, 18)} ${fitCell(progressText, 12)} ${fitCell(blueprint, 10)} ${version}`, usable);
+      output.push(isSelected ? style(row, "\x1b[1;36m", color) : row);
     }
   }
   output.push(
     line,
-    busy ? "Working..." : "Actions (Left/Right + Enter, or shortcut key):",
+    busy ? "Working..." : "Actions  ←/→ select  •  Enter run  •  letter shortcut:",
   );
   if (!busy) output.push(...actionLines);
   if (message) output.push(line, fit(safeText(message, 1200), usable));
@@ -88,19 +97,37 @@ export function renderFleet({
   return output.join("\n");
 }
 
-function renderActionStrip(actions, selected, width) {
+function renderActionStrip(actions, selected, width, color) {
   const lines = [];
-  let current = "";
+  let current = [];
+  let currentWidth = 0;
   for (const [index, action] of actions.entries()) {
     const label = `${action.shortcut}: ${action.label}`;
-    const token = index === selected ? `[${label}]` : action.enabled ? label : `(${label})`;
-    if (current && current.length + token.length + 3 > width) {
-      lines.push(current);
-      current = token;
-    } else current += `${current ? "   " : ""}${token}`;
+    const selectedAction = index === selected;
+    const token = selectedAction ? `← [${label}] →` : action.enabled ? label : `(${label})`;
+    const separator = current.length ? 3 : 0;
+    if (current.length && currentWidth + separator + token.length > width) {
+      lines.push(renderActionLine(current, color));
+      current = [];
+      currentWidth = 0;
+    }
+    current.push({ token, selected: selectedAction, enabled: action.enabled });
+    currentWidth += (current.length > 1 ? 3 : 0) + token.length;
   }
-  if (current) lines.push(current);
-  return lines.map((line) => fit(line, width));
+  if (current.length) lines.push(renderActionLine(current, color));
+  return lines;
+}
+
+function renderActionLine(items, color) {
+  return items.map((item) => {
+    if (item.selected) return style(item.token, "\x1b[1;30;46m", color);
+    if (!item.enabled) return style(item.token, "\x1b[2m", color);
+    return item.token;
+  }).join("   ");
+}
+
+function style(value, code, enabled) {
+  return enabled ? `${code}${value}\x1b[0m` : value;
 }
 
 export function projectSummary(entry, data = {}) {

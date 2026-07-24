@@ -8,6 +8,7 @@ import {
   fleetActionMenu,
   nextFleetAction,
   renderFleet,
+  terminalColorEnabled,
 } from "../.agents/skills/init-project/bin/lib/global-control-plane-ui.mjs";
 import { createScaffold, repositoryRoot, run } from "./runtime-helpers.mjs";
 
@@ -25,9 +26,30 @@ test("fleet actions are arrow-selectable while preserving shortcut keys", () => 
   assert.equal(withoutProject[2].enabled, false);
   assert.equal(nextFleetAction(withoutProject, 0, 1), 1);
 
-  const rendered = renderFleet({ projects: [project], selected: 0, selectedAction: 1, update: { installed_version: "1.4.0" } });
-  assert.match(rendered, /Actions \(Left\/Right \+ Enter/);
+  const rendered = renderFleet({ projects: [project], selected: 0, selectedAction: 1, update: { installed_version: "1.4.5" } });
+  assert.match(rendered, /Actions  ←\/→ select/);
+  assert.match(rendered, /↑\/↓/);
   assert.match(rendered, /\[A: Add project\]/);
+  assert.doesNotMatch(rendered, /\x1b/);
+
+  const colored = renderFleet({
+    projects: [project],
+    selected: 0,
+    selectedAction: 1,
+    update: { installed_version: "1.4.5" },
+    color: true,
+  });
+  assert.match(colored, /\x1b\[1;36m▶ Producer Scribe/);
+  assert.match(colored, /\x1b\[1;30;46m← \[A: Add project\] →\x1b\[0m/);
+});
+
+test("fleet colors respect terminal capability and standard opt-outs", () => {
+  assert.equal(terminalColorEnabled({ isTTY: true, env: {} }), true);
+  assert.equal(terminalColorEnabled({ isTTY: false, env: {} }), false);
+  assert.equal(terminalColorEnabled({ isTTY: true, env: { NO_COLOR: "1" } }), false);
+  assert.equal(terminalColorEnabled({ isTTY: true, env: { FORCE_COLOR: "0" } }), false);
+  assert.equal(terminalColorEnabled({ isTTY: false, env: { FORCE_COLOR: "1" } }), true);
+  assert.equal(terminalColorEnabled({ isTTY: true, env: { TERM: "dumb" } }), false);
 });
 
 test("fleet rendering stays inside the requested terminal height", () => {
@@ -37,14 +59,14 @@ test("fleet rendering stays inside the requested terminal height", () => {
     mode: { id: index === 0 ? "running" : "idle", label: index === 0 ? "Running" : "Ready" },
     status: {},
     blueprint_version: 1,
-    control_plane_version: "1.4.0",
+    control_plane_version: "1.4.5",
   }));
   const height = 24;
   const rendered = renderFleet({
     projects,
     selected: 15,
     selectedAction: 0,
-    update: { installed_version: "1.4.0" },
+    update: { installed_version: "1.4.5" },
     message: "Ready.",
     width: 64,
     height,
