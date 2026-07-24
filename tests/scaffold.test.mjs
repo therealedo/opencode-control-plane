@@ -206,6 +206,13 @@ function validBlueprint() {
   }
 }
 
+function conventionalBlueprint(prefix = "feat(opportunities)") {
+  const blueprint = validBlueprint()
+  blueprint.schema_version = 6
+  blueprint.git = { commit_prefixes: { M001: prefix } }
+  return blueprint
+}
+
 function runNode(script, args, cwd, options = {}) {
   return spawnSync(process.execPath, [script, ...args], {
     cwd,
@@ -287,7 +294,7 @@ test("scaffolder creates the bounded project control plane", async () => {
       path.join(target, ".autopilot", "init", "blueprint.json"),
       "utf8",
     ))
-    assert.equal(starterBlueprint.schema_version, 5)
+    assert.equal(starterBlueprint.schema_version, 6)
     assert.deepEqual(starterBlueprint.tooling.gitignore, [])
     assert.deepEqual(starterBlueprint.tooling.ephemeral, [])
     assert.deepEqual(starterBlueprint.opencode, {
@@ -813,6 +820,43 @@ test("structured blueprint rendering is deterministic, bounded, and OpenCode-com
   }
 })
 
+test("schema 6 renders a deterministic Conventional Commit map without changing the task queue", async () => {
+  const target = await mkdtemp(path.join(os.tmpdir(), "autopilot-conventional-git-"))
+  try {
+    assert.equal(scaffoldTarget(target).status, 0)
+    const blueprint = conventionalBlueprint()
+    await writeFile(
+      path.join(target, ".autopilot", "init", "blueprint.json"),
+      `${JSON.stringify(blueprint, null, 2)}\n`,
+      "utf8",
+    )
+    const rendered = runNode(rendererScript, ["--target", target, "--json"], target)
+    assert.equal(rendered.status, 0, rendered.stderr)
+    const config = JSON.parse(await readFile(path.join(target, ".autopilot", "config.json"), "utf8"))
+    const queue = JSON.parse(await readFile(path.join(target, ".project", "plan", "queue.json"), "utf8"))
+    assert.equal(config.schema_version, 2)
+    assert.deepEqual(config.git.commit_prefixes, { M001: "feat(opportunities)" })
+    assert.equal(Object.hasOwn(config.git, "commit_prefix"), false)
+    assert.equal(Object.hasOwn(queue.tasks.M001, "commit_prefix"), false)
+    assert.equal(Object.hasOwn(queue.tasks.M001, "commit"), false)
+
+    const missing = conventionalBlueprint()
+    missing.git.commit_prefixes = { M999: "fix(auth)" }
+    await writeFile(
+      path.join(target, ".autopilot", "init", "blueprint.json"),
+      `${JSON.stringify(missing, null, 2)}\n`,
+      "utf8",
+    )
+    const rejected = runNode(rendererScript, ["--target", target, "--json"], target)
+    assert.notEqual(rejected.status, 0)
+    assert.match(rejected.stderr, /missing: M001/i)
+    assert.match(rejected.stderr, /unknown: M999/i)
+    assert.deepEqual(config, JSON.parse(await readFile(path.join(target, ".autopilot", "config.json"), "utf8")))
+  } finally {
+    await rm(target, { recursive: true, force: true })
+  }
+})
+
 test("phase context, exact byte reports, and complete review reserves stay aligned", async () => {
   const target = await mkdtemp(path.join(os.tmpdir(), "autopilot-context-report-"))
   try {
@@ -1072,7 +1116,7 @@ test("blueprint validation failures make no generated-file changes", async () =>
       const rejected = runNode(rendererScript, ["--target", target, "--json"], target)
       assert.notEqual(rejected.status, 0, rejected.stdout)
       if (blueprint === legacySchema) {
-        assert.match(rejected.stderr, /schema_version must be 5; older schemas do not contain versioned evolution metadata/)
+        assert.match(rejected.stderr, /schema_version must be 5 or 6; older schemas do not contain versioned evolution metadata/)
       }
       const after = await Promise.all(tracked.map((file) => readFile(file, "utf8")))
       assert.deepEqual(after, before)
@@ -1474,6 +1518,87 @@ test("finalizer recovers from Git identity failure, commits, cleans init inputs,
   }
 })
 
+test("an older in-progress interview refreshes owned scripts, preserves answers, and finalizes conventionally", async () => {
+  const target = await mkdtemp(path.join(os.tmpdir(), "autopilot-interview-refresh-"))
+  try {
+    assert.equal(scaffoldTarget(target).status, 0)
+    const blueprint = conventionalBlueprint("fix(auth)")
+    const blueprintFile = path.join(target, ".autopilot", "init", "blueprint.json")
+    await writeFile(blueprintFile, `${JSON.stringify(blueprint, null, 2)}\n`, "utf8")
+
+    const staleRenderer = path.join(target, ".autopilot", "bin", "render-blueprint.mjs")
+    await writeFile(
+      staleRenderer,
+      '#!/usr/bin/env node\nprocess.stderr.write("stale interview renderer was invoked\\n")\nprocess.exit(91)\n',
+      "utf8",
+    )
+    const ownershipFile = path.join(target, ".autopilot", "control-plane.json")
+    const ownership = JSON.parse(await readFile(ownershipFile, "utf8"))
+    ownership.version = "1.5.0"
+    ownership.managed_files[".autopilot/bin/render-blueprint.mjs"].sha256 = createHash("sha256")
+      .update(await readFile(staleRenderer))
+      .digest("hex")
+    await writeFile(ownershipFile, `${JSON.stringify(ownership, null, 2)}\n`, "utf8")
+
+    assert.equal(spawnSync("git", ["init"], { cwd: target, encoding: "utf8", windowsHide: true }).status, 0)
+    for (const [key, value] of [["user.name", "Autopilot Test"], ["user.email", "autopilot@example.invalid"]]) {
+      assert.equal(spawnSync("git", ["config", key, value], {
+        cwd: target,
+        encoding: "utf8",
+        windowsHide: true,
+      }).status, 0)
+    }
+
+    const closeout = runNode(closeoutScript, ["--target", target, "--json"], target)
+    assert.equal(closeout.status, 0, closeout.stderr)
+    const output = JSON.parse(closeout.stdout)
+    assert.equal(output.interview_refresh.interview_refreshed, true)
+    assert.equal(output.interview_refresh.from_version, "1.5.0")
+    assert.equal(output.interview_refresh.to_version, "1.6.0")
+    assert.equal(output.interview_refresh.commit, null)
+    assert.equal(output.upgrade.changed, false)
+    assert.deepEqual(
+      JSON.parse(await readFile(path.join(target, "blueprints", "v1", "blueprint.json"), "utf8")),
+      blueprint,
+    )
+    assert.doesNotMatch(await readFile(staleRenderer, "utf8"), /stale interview renderer/)
+    assert.equal(spawnSync("git", ["log", "-1", "--pretty=%s"], {
+      cwd: target,
+      encoding: "utf8",
+      windowsHide: true,
+    }).stdout.trim(), "chore(control-plane): initialize project blueprint")
+    assert.equal(spawnSync("git", ["rev-list", "--count", "HEAD"], {
+      cwd: target,
+      encoding: "utf8",
+      windowsHide: true,
+    }).stdout.trim(), "1")
+  } finally {
+    await rm(target, { recursive: true, force: true })
+  }
+})
+
+test("same-version interview drift is rejected before a project-local renderer executes", async () => {
+  const target = await mkdtemp(path.join(os.tmpdir(), "autopilot-interview-drift-"))
+  try {
+    assert.equal(scaffoldTarget(target).status, 0)
+    assert.equal(spawnSync("git", ["init"], { cwd: target, encoding: "utf8", windowsHide: true }).status, 0)
+    const renderer = path.join(target, ".autopilot", "bin", "render-blueprint.mjs")
+    const marker = path.join(target, ".git", "tampered-renderer-ran")
+    await writeFile(
+      renderer,
+      `#!/usr/bin/env node\nimport { writeFileSync } from "node:fs"\nwriteFileSync(${JSON.stringify(marker)}, "ran")\nprocess.exit(91)\n`,
+      "utf8",
+    )
+
+    const closeout = runNode(closeoutScript, ["--target", target, "--json"], target)
+    assert.notEqual(closeout.status, 0)
+    assert.match(`${closeout.stdout}\n${closeout.stderr}`, /managed framework file changed|CONTROL_PLANE_DRIFT/i)
+    await assert.rejects(access(marker), { code: "ENOENT" })
+  } finally {
+    await rm(target, { recursive: true, force: true })
+  }
+})
+
 test("finalizer rejects a nested Git worktree target before rendering", async () => {
   const parent = await mkdtemp(path.join(os.tmpdir(), "autopilot-finalize-parent-"))
   const target = path.join(parent, "nested")
@@ -1586,7 +1711,7 @@ test("single initialization closeout returns only failed provisioning checks whe
     const output = JSON.parse(closeout.stdout)
     assert.equal(output.ready, false)
     assert.equal(output.upgrade.from_version, "1.2.0")
-    assert.equal(output.upgrade.to_version, "1.5.0")
+    assert.equal(output.upgrade.to_version, "1.6.0")
     assert.equal(output.upgrade.changed, true)
     assert.equal(output.started, null)
     assert.ok(output.provisioning.some((item) => item.kind === "opencode"))

@@ -29,6 +29,7 @@ import {
   safeBaseEnv,
   sanitizeProcessResult,
 } from "../assets/project/.autopilot/bin/lib/process.mjs";
+import { controllerCommitMessage } from "../assets/project/.autopilot/bin/lib/commit-policy.mjs";
 
 const PROCESS_TIMEOUT_MS = 10 * 60_000;
 const PROCESS_OUTPUT_BYTES = 1024 * 1024;
@@ -50,7 +51,6 @@ async function main() {
   const manifestFile = path.join(target, ".autopilot", "control-plane.json");
   const state = await readBoundedJson(path.join(target, ".autopilot", "state.json"), 64 * 1024, { optional: true }) ?? {};
   await assertSafeControllerBoundary(target, state);
-  await assertCleanGit(target);
 
   const previous = await readBoundedJson(manifestFile, MANIFEST_BYTES, { optional: true });
   if (!previous && !args.adopt) {
@@ -62,6 +62,12 @@ async function main() {
   if (previous) await validatePreviousManifest(target, previous);
   if (previous && compareVersions(previous.version, release.version) > 0) {
     throw upgradeError(`Downgrades are not allowed (${previous.version} -> ${release.version})`, "DOWNGRADE_DENIED");
+  }
+  if (args.interview) {
+    if (args.adopt || !previous) throw upgradeError("Interview refresh requires existing versioned ownership", "INTERVIEW_REFRESH_DENIED");
+    await assertInterviewBoundary(target, state);
+  } else {
+    await assertCleanGit(target);
   }
 
   const candidates = new Map();
@@ -97,6 +103,26 @@ async function main() {
   if (args.dryRun) return output(preview);
   if (!preview.changed) return output({ ...preview, commit: null, rollback: null });
 
+  if (args.interview) {
+    const transaction = await applyInterviewRefresh({
+      target,
+      skillRoot,
+      release,
+      entries,
+      previous,
+      candidates,
+      manifestFile,
+    });
+    return output({
+      ...preview,
+      interview_refreshed: true,
+      commit: null,
+      rollback: "The normal initialization baseline commit will capture the refreshed framework.",
+      validation: transaction.validation,
+      cleanup_warnings: transaction.cleanupWarnings,
+    });
+  }
+
   const transaction = await applyTransaction({ target, skillRoot, release, entries, previous, candidates, manifestFile });
   output({
     ...preview,
@@ -104,6 +130,110 @@ async function main() {
     rollback: `git revert ${transaction.commit}`,
     validation: transaction.validation,
   });
+}
+
+async function applyInterviewRefresh({ target, skillRoot, release, entries, previous, candidates, manifestFile }) {
+  const nonce = `${process.pid}-${randomBytes(6).toString("hex")}`;
+  const swaps = [];
+  const quarantine = path.join(target, ".autopilot", "runtime", `interview-refresh-backup-${nonce}`);
+  const blueprintFile = path.join(target, ".autopilot", "init", "blueprint.json");
+  const blueprintBefore = await readManagedFile(blueprintFile);
+  try {
+    for (const [relative, bytes] of candidates) {
+      const destination = resolveManaged(target, relative);
+      await assertSafeDestination(target, destination, { optional: true });
+      await mkdir(path.dirname(destination), { recursive: true });
+      await assertSafeDestination(target, destination, { optional: true });
+      const stage = path.join(path.dirname(destination), `.${path.basename(destination)}.ocp-stage-${nonce}`);
+      const backup = path.join(path.dirname(destination), `.${path.basename(destination)}.ocp-backup-${nonce}`);
+      await assertAbsent(stage);
+      await assertAbsent(backup);
+      const hadDestination = await exists(destination);
+      const mode = relative === "control-plane" ? 0o755 : 0o600;
+      await writeFile(stage, bytes, { flag: "wx", mode });
+      swaps.push({ relative, destination, stage, backup, hadDestination, backupMoved: false, installed: false });
+    }
+
+    await performSwaps(swaps);
+    if (await exists(path.join(target, "control-plane"))) await chmod(path.join(target, "control-plane"), 0o755);
+
+    const manifest = await createInstalledManifest(skillRoot, target, {
+      installedAt: new Date().toISOString(),
+      previous,
+      kind: "interview-refresh",
+    });
+    const manifestSwap = await stageManifestSwap(target, manifestFile, manifest, nonce);
+    swaps.push(manifestSwap);
+    await performSwaps([manifestSwap]);
+
+    const toolCheck = await runNode(
+      target,
+      path.join(target, ".autopilot", "bin", "configure-tools.mjs"),
+      ["--root", target, "--check", "--json"],
+    );
+    if (toolCheck.code !== 0 || toolCheck.output_truncated) {
+      throw upgradeError(`Role-tool validation failed: ${diagnostic(toolCheck)}`, "UPGRADE_VALIDATION_FAILED");
+    }
+    const validationResult = await runNode(
+      target,
+      path.join(target, ".autopilot", "bin", "validate.mjs"),
+      ["--root", target, "--skip-git", "--json"],
+    );
+    if (validationResult.code !== 0 || validationResult.output_truncated) {
+      throw upgradeError(`Interview refresh validation failed: ${diagnostic(validationResult)}`, "UPGRADE_VALIDATION_FAILED");
+    }
+    const blueprintAfter = await readManagedFile(blueprintFile);
+    if (!blueprintAfter.equals(blueprintBefore)) {
+      throw upgradeError("Interview refresh changed the draft blueprint", "INTERVIEW_BLUEPRINT_CHANGED");
+    }
+
+    const validation = JSON.parse(validationResult.stdout);
+    await assertSafeDestination(target, quarantine, { optional: true });
+    await mkdir(quarantine, { recursive: false, mode: 0o700 });
+    let backupIndex = 0;
+    for (const swap of swaps) {
+      if (!swap.backupMoved) continue;
+      const retained = path.join(quarantine, `${String(backupIndex).padStart(4, "0")}.backup`);
+      backupIndex += 1;
+      await assertAbsent(retained);
+      await rename(swap.backup, retained);
+      swap.backup = retained;
+    }
+    for (const swap of swaps) swap.backupMoved = false;
+
+    const cleanupWarnings = [];
+    try {
+      await rm(quarantine, { recursive: true, force: true });
+    } catch (error) {
+      cleanupWarnings.push(`Validated pre-initialization backups remain in ignored runtime storage: ${error.message}`);
+    }
+    return { validation, cleanupWarnings };
+  } catch (error) {
+    const rollbackErrors = [];
+    for (const swap of [...swaps].reverse()) {
+      try {
+        if (swap.installed) await rm(swap.destination, { force: true });
+        if (swap.backupMoved) await rename(swap.backup, swap.destination);
+        await rm(swap.stage, { force: true });
+      } catch (rollbackError) {
+        rollbackErrors.push(`${swap.relative}: ${rollbackError.message}`);
+      }
+    }
+    if (rollbackErrors.length === 0) {
+      try {
+        await rm(quarantine, { recursive: true, force: true });
+      } catch (rollbackError) {
+        rollbackErrors.push(`interview refresh quarantine: ${rollbackError.message}`);
+      }
+    }
+    if (rollbackErrors.length > 0) {
+      throw upgradeError(
+        `${error.message}; rollback also failed: ${rollbackErrors.join("; ")}; recovery artifacts were retained (quarantine when used: ${quarantine})`,
+        "UPGRADE_ROLLBACK_FAILED",
+      );
+    }
+    throw error;
+  }
 }
 
 async function applyTransaction({ target, skillRoot, release, previous, candidates, manifestFile }) {
@@ -163,9 +293,16 @@ async function applyTransaction({ target, skillRoot, release, previous, candidat
         unexpected,
       });
     }
-    const message = previous
-      ? `control-plane: upgrade ${previous.version} to ${release.version}`
-      : `control-plane: adopt ${release.version}`;
+    const description = previous
+      ? `upgrade ${previous.version} to ${release.version}`
+      : `adopt ${release.version}`;
+    const projectConfig = await readBoundedJson(
+      path.join(target, ".autopilot", "config.json"),
+      MANIFEST_BYTES,
+    );
+    const message = projectConfig.schema_version === 2
+      ? controllerCommitMessage(projectConfig.git, description)
+      : `control-plane: ${description}`;
     const commitResult = await git(target, ["commit", "--no-verify", "-m", message]);
     const commit = (await git(target, ["rev-parse", "HEAD"])).stdout.trim();
     committed = true;
@@ -290,6 +427,29 @@ async function assertSafeControllerBoundary(target, state) {
   if (state.active_task) throw upgradeError(`Task ${state.active_task} is still active; wait for a task boundary`, "ACTIVE_TASK");
   if (state.completion) throw upgradeError("A task completion transaction is unfinished", "ACTIVE_TRANSACTION");
   if (state.finalization) throw upgradeError("A project finalization transaction is unfinished", "ACTIVE_TRANSACTION");
+}
+
+async function assertInterviewBoundary(target, state) {
+  if (
+    state.status !== "idle" || state.phase !== "idle" || state.pid !== null ||
+    state.active_task !== null || state.completion !== null || state.finalization !== null
+  ) {
+    throw upgradeError("Interview refresh requires the untouched idle initialization boundary", "INTERVIEW_REFRESH_DENIED");
+  }
+  const queue = await readBoundedJson(path.join(target, ".project", "plan", "queue.json"), MANIFEST_BYTES);
+  if (queue?.project_status !== "initializing") {
+    throw upgradeError("Interview refresh is allowed only before blueprint finalization", "INTERVIEW_REFRESH_DENIED");
+  }
+  await readManagedFile(path.join(target, ".autopilot", "init", "blueprint.json"));
+  for (const forbidden of [
+    path.join(target, "blueprints", "current", "record.json"),
+    path.join(target, "blueprints", "current", "render-manifest.json"),
+    path.join(target, "blueprints", "v1"),
+  ]) {
+    if (await exists(forbidden)) {
+      throw upgradeError("Interview refresh refuses an already rendered or versioned blueprint", "INTERVIEW_REFRESH_DENIED");
+    }
+  }
 }
 
 async function assertStandaloneProject(target) {
@@ -452,7 +612,7 @@ function upgradeError(message, code, details = null) {
 }
 
 function parseArgs(argv) {
-  const result = { target: null, sourceSkill: null, dryRun: false, adopt: false, json: false };
+  const result = { target: null, sourceSkill: null, dryRun: false, adopt: false, interview: false, json: false };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (["--target", "--source-skill"].includes(value)) {
@@ -462,12 +622,14 @@ function parseArgs(argv) {
       else result.sourceSkill = selected;
     } else if (value === "--dry-run") result.dryRun = true;
     else if (value === "--adopt") result.adopt = true;
+    else if (value === "--interview") result.interview = true;
     else if (value === "--json") result.json = true;
     else if (value === "--help") {
-      process.stdout.write("Usage: upgrade-project.mjs [--target PATH] [--source-skill PATH] [--dry-run] [--adopt] [--json]\n");
+      process.stdout.write("Usage: upgrade-project.mjs [--target PATH] [--source-skill PATH] [--dry-run] [--adopt | --interview] [--json]\n");
       process.exit(0);
     } else throw new Error(`Unknown argument: ${value}`);
   }
+  if (result.adopt && result.interview) throw new Error("--adopt and --interview are mutually exclusive");
   return result;
 }
 

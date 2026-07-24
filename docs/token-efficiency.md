@@ -9,6 +9,7 @@ Version 1.2 reduces recurring model context by compiling the smallest safe packe
 - **Avoid implicit project reloads.** Autonomous OpenCode phases start from a sterile discovery directory. Project `AGENTS.md` remains useful for manual sessions but is not paid for again in every fresh phase.
 - **Use the first sufficient implementation.** After tracing the affected flow and callers, workers prefer no change, existing project code, language or platform features, installed dependencies, then minimal new code. Correctness, validation, security, data safety, accessibility, readability, and required tests remain mandatory.
 - **Return contracts, not narration.** The controller derives task identity, attempt, and changed paths. A phase submits one concise typed result; scripts and the TUI report progress without model-written status updates.
+- **Compile commit intent once.** Optional per-task Conventional Commit prefixes live in protected controller configuration and never enter worker prompts or trigger runtime classification.
 - **Measure without steering acceptance.** Receipts can retain validated provider-reported input, output, reasoning, cache, and cost data when OpenCode supplies it. Telemetry never decides whether work passes.
 
 ## Fixed-context measurement

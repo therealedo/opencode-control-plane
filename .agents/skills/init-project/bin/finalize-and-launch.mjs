@@ -5,6 +5,7 @@ import os from "node:os"
 import { fileURLToPath } from "node:url"
 import {
   assertPrivateFile,
+  exists,
   readJson,
 } from "../assets/project/.autopilot/bin/lib/core.mjs"
 import {
@@ -45,6 +46,7 @@ const finalizer = path.join(skillDirectory, "finalize.mjs")
 const upgrader = path.join(skillDirectory, "upgrade-project.mjs")
 const controller = path.join(target, ".autopilot", "bin", "autopilot.mjs")
 
+const interviewRefresh = await refreshInterviewProject(target)
 const finalized = await runJson(
   process.execPath,
   [finalizer, "--target", target, "--json"],
@@ -76,6 +78,7 @@ if (!preflight.ready) {
     ok: true,
     target,
     baseline_commit: finalized.baseline_commit ?? null,
+    interview_refresh: interviewRefresh,
     upgrade,
     runtime_variant: runtimeVariantLabel(runtimeSettings?.variant),
     registration,
@@ -91,6 +94,7 @@ if (!args.start) {
     ok: true,
     target,
     baseline_commit: finalized.baseline_commit ?? null,
+    interview_refresh: interviewRefresh,
     upgrade,
     runtime_variant: runtimeVariantLabel(runtimeSettings?.variant),
     registration,
@@ -118,6 +122,7 @@ process.stdout.write(`${JSON.stringify({
   ok: true,
   target,
   baseline_commit: finalized.baseline_commit ?? null,
+  interview_refresh: interviewRefresh,
   upgrade,
   runtime_variant: runtimeVariantLabel(runtimeSettings?.variant),
   registration,
@@ -127,6 +132,19 @@ process.stdout.write(`${JSON.stringify({
     log: started.log ?? null,
   },
 }, null, args.json ? 0 : 2)}\n`)
+
+async function refreshInterviewProject(root) {
+  if (!(await exists(path.join(root, ".autopilot", "init", "blueprint.json")))) {
+    return { changed: false, skipped: "already finalized" }
+  }
+  return runJson(
+    process.execPath,
+    [upgrader, "--target", root, "--source-skill", path.join(skillDirectory, ".."), "--interview", "--json"],
+    root,
+    "In-progress interview framework refresh",
+    { timeoutMs: FINALIZE_TIMEOUT_MS, env: baseChildEnvironment() },
+  )
+}
 
 async function upgradeFinalizedProject(root) {
   const release = await readJson(path.join(skillDirectory, "..", "assets", "control-plane-release.json"), {

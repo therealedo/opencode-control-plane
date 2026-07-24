@@ -22,6 +22,8 @@ New projects record SHA-256 ownership for every managed framework file. Dynamic 
 
 Product files, `.project/`, blueprints, config, state, credentials, `.env*`, and task evidence are not generic upgrade targets.
 
+For an unfinalized interview only, a guarded refresh can replace hash-owned framework files without requiring a clean baseline that does not yet exist. It requires an idle initializing state and no rendered/versioned blueprint, preserves the draft blueprint byte-for-byte, performs no remote Git action, and leaves the refreshed files for the normal baseline commit.
+
 ## Disposable evaluations
 
 Evaluation never targets a registered or user-supplied existing project. The evaluator creates exclusive marker-owned candidates beneath its own temporary parent, rejects path redirection and linked candidate files, uses a private Control Plane home, and never invokes the registry, installer, or fleet updater. Bundled cases use no credentials, network requests, package installation, or production service.

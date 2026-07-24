@@ -50,6 +50,7 @@ const GATE_RUNNER_SNAPSHOT = Object.freeze([
   "run-gate.mjs",
   "process-guard.mjs",
   "windows-job-guard.ps1",
+  "lib/commit-policy.mjs",
   "lib/core.mjs",
   "lib/contracts.mjs",
   "lib/gate-runner.mjs",

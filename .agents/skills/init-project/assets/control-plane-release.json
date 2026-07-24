@@ -2,7 +2,7 @@
   "schema_version": 1,
   "product_id": "opencode-control-plane",
   "name": "OpenCode Control Plane",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "repository": "https://github.com/therealedo/opencode-control-plane.git",
   "identity": "a high-efficiency, zero-token orchestrator that turns OpenCode into a policy-bounded, self-verifying coding worker. Keeping it lean, fast, and terminal-native is its superpower",
   "project_manifest_schema": 1,

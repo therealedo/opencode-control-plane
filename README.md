@@ -34,6 +34,10 @@ If setup says the command folder is not on your PATH, add the exact folder it pr
 4. Answer the interview. You can paste an existing project brief or chat first and ask it to question only missing or ambiguous areas.
 5. Give environment-variable names, never secret values.
 
+You may use one fixed Git prefix or Conventional Commit types per task (`feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `ci`, `build`, or `security`, optionally scoped). The interview records the choice once; workers never spend tokens classifying commits. Initialization creates local commits only and never changes or pushes a remote.
+
+If an interview was already open when this support was installed, keep it open. Choose **Type your own answer**, ask the agent to re-read the installed `init-project` skill, and tell it to reuse the policy you already supplied. Finalization safely refreshes the project-owned framework before it renders the blueprint.
+
 When the interview is complete, deterministic scripts create the modular project files, Blueprint v1, tests and worker configuration, commit a clean baseline, register the project, and check readiness. They deliberately stop before the first worker starts.
 
 Open `control-plane` in another terminal, select the project, choose **Worker reasoning** until the desired model variant is shown, then choose **Start worker**. This setting applies to every fresh autonomous worker; changing `/variants` in the interview session alone does not carry into those fresh worker sessions.
@@ -113,6 +117,7 @@ Local workers are policy-bounded, not operating-system sandboxed. OpenCode and p
 - A deterministic compiler sends only the task's selected project facts, paths, tools, and test credentials while preserving code blocks exactly.
 - Workers inspect narrowly, reuse existing/native capabilities before adding code, and reviewers reject needless files, dependencies, configuration, and abstractions without relaxing quality or safety.
 - Tests, Git transitions, status polling, upgrades, and context handoffs are deterministic and token-free.
+- Per-task Conventional Commit prefixes live in controller configuration, outside worker prompts.
 - Tool results and worker contracts are paginated and bounded; full evidence stays in artifacts instead of prompts.
 - Blueprints and receipts preserve durable memory without growing every prompt, while receipts record actual model usage for release comparisons.
 

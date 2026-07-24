@@ -90,6 +90,7 @@ import {
 } from "./state.mjs";
 import { exactSecretMatches } from "./secrets.mjs";
 import { scanFilesForSecrets, validateProject } from "./validator.mjs";
+import { controllerCommitMessage, taskCommitMessage } from "./commit-policy.mjs";
 
 function runId() {
   return `run-${new Date().toISOString().replace(/[-:.TZ]/g, "")}-${process.pid}`;
@@ -1329,8 +1330,7 @@ export class Controller {
     let completion = this.state.completion;
     const task = await this.assertCompletionContract(completion);
     const taskId = completion.task_id;
-    const prefix = this.project.config.git.commit_prefix;
-    const applicationMessage = `${prefix}: ${taskId} ${task.title}`;
+    const applicationMessage = taskCommitMessage(this.project.config.git, task);
 
     if (!completion.application) {
       const head = await gitHead(this.root);
@@ -1603,7 +1603,7 @@ export class Controller {
       [metadataFiles[0]]: completion.planned_queue_file_sha256,
       [metadataFiles[1]]: jsonDocumentSha256(receipt),
     };
-    const metadataMessage = `${prefix}: record ${taskId}`;
+    const metadataMessage = controllerCommitMessage(this.project.config.git, `record ${taskId}`);
     if (!completion.metadata) {
       if (await gitHead(this.root) !== application.result_commit) {
         throw new AutopilotError("HEAD advanced without a persisted metadata commit plan", {
@@ -2421,7 +2421,7 @@ export class Controller {
       [metadataFiles[0]]: finalization.planned_queue_file_sha256,
       [metadataFiles[1]]: jsonDocumentSha256(receipt),
     };
-    const message = `${this.project.config.git.commit_prefix}: complete project`;
+    const message = controllerCommitMessage(this.project.config.git, "complete project");
     if (!finalization.metadata) {
       const prepared = await prepareCommitTree(
         this.project,

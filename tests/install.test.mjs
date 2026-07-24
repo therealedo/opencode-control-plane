@@ -130,7 +130,7 @@ test("global installer keeps phase roles and lifecycle commands project-local an
     const manifest = JSON.parse(await readFile(path.join(home, ".agents", ".autopilot-install-manifest.json"), "utf8"))
     assert.equal(manifest.schema_version, 2)
     assert.equal(manifest.product_id, "opencode-control-plane")
-    assert.equal(manifest.version, "1.5.0")
+    assert.equal(manifest.version, "1.6.0")
     assert.equal(manifest.full, false)
     assert.equal(manifest.home, home)
     assert.equal(manifest.config_home, configHome)
@@ -308,7 +308,7 @@ test("upgrade mode preserves the prior install selection and rejects global drif
     const upgraded = install(["--home", home, "--upgrade", "--json"])
     assert.equal(upgraded.status, 0, upgraded.stderr)
     const manifest = JSON.parse(await readFile(path.join(home, ".agents", ".autopilot-install-manifest.json"), "utf8"))
-    assert.equal(manifest.previous_version, "1.5.0")
+    assert.equal(manifest.previous_version, "1.6.0")
 
     const drift = path.join(home, ".agents", "skills", "init-project", "SKILL.md")
     await writeFile(drift, "user-edited global skill\n", "utf8")

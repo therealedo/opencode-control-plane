@@ -27,7 +27,9 @@ Ask focused questions, then edit only `.autopilot/init/blueprint.json`. Cover:
 4. OpenCode model/auth, budgets, gates, grants, credentials, MCPs;
 5. roadmap and small dependency-ordered tasks.
 
-Preserve `schema_version: 5`, starter shapes/bounds, concise text, and variable names only—never secret values. Consequential decisions need stable IDs, choice/rationale, rejected alternatives, dependencies, generated components, paths, environment names, and tests. Set one `provider/model`, explicit auth mode, auth variable names, and Git prefix.
+Preserve `schema_version: 6`, starter shapes/bounds, concise text, and variable names only—never secret values. Consequential decisions need stable IDs, choice/rationale, rejected alternatives, dependencies, generated components, paths, environment names, and tests. Set one `provider/model`, explicit auth mode, and auth variable names.
+
+Git stays local: initialize the baseline but never change or push a remote. Use one `git.commit_prefix`, or map every task ID in `git.commit_prefixes` to `feat|fix|refactor|test|docs|chore|ci|build|security`, optionally scoped like `feat(opportunities)`. Choose while planning; the runtime never chooses. Mapped bookkeeping uses `chore(control-plane)`.
 
 Every gate needs `feedback`; true means deterministic, non-mutating, credential-free implementation feedback. Phase profiles allow only `opencode`; gate profiles list gate IDs. Profiles contain only `env_file`, exact `allow` names, and `allowed_gates`. MCP environment placeholders must be allowed by the phase profile. Local MCPs use trusted fixed argv, no caller `cwd`, optional environment placeholders, and a timeout; remote MCPs require HTTPS. Tasks select exact grants.
 

@@ -21,7 +21,7 @@ Autonomous phases use a sterile OpenCode project directory. This prevents the ma
 
 The context compiler operates only on selected generated `.project/` references. It removes exact known controller boilerplate already present in the higher-authority role, collapses redundant blank space, and preserves fenced code blocks verbatim. It never rewrites project memory or application files.
 
-The worker submits a typed candidate contract. The controller verifies changed paths and Git invariants, runs fixed gates, and starts a separate reviewer. Rejected work enters a fresh repair phase. Accepted work receives an application commit, metadata commit, and receipt before the next task is selected.
+The worker submits a typed candidate contract. The controller verifies changed paths and Git invariants, runs fixed gates, and starts a separate reviewer. Rejected work enters a fresh repair phase. Accepted work receives an application commit, metadata commit, and receipt before the next task is selected. A Blueprint schema-6 project can map each task ID to one validated Conventional Commit prefix; the controller reads that protected map without asking a model, while bookkeeping uses `chore(control-plane)`.
 
 Each phase is a new OpenCode session. Long-session compaction remains a fallback, not the primary continuity mechanism. Durable JSON/Markdown contracts and Git commits carry state across sessions, crashes, and context limits.
 
@@ -74,4 +74,5 @@ While open, the fleet dashboard checks the fixed public GitHub release channel w
 - `.agents/skills/init-project/assets/project/`: version-owned project template copied by the scaffolder.
 - `.agents/skills/init-project/assets/project/.autopilot/bin/lib/context-compiler.mjs`: deterministic selected-reference compaction with protected fenced content.
 - `.agents/skills/init-project/assets/project/.autopilot/bin/lib/context-pack.mjs`: stable bounded phase-packet assembly and size reporting.
+- `.agents/skills/init-project/assets/project/.autopilot/bin/lib/commit-policy.mjs`: fixed or mapped commit-policy validation and deterministic subjects.
 - `tests/`: deterministic runtime, policy-boundary, evaluator, registry, dashboard, release, installer, evolution, and upgrade coverage.

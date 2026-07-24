@@ -235,6 +235,97 @@ test("insurance copilot architecture changes create and safely activate Blueprin
   }
 })
 
+test("a fixed schema-5 policy evolves to a mapped schema-6 policy without fake product work", async () => {
+  const target = await mkdtemp(path.join(os.tmpdir(), "autopilot-evolution-git-policy-"))
+  try {
+    nodeJson(scaffold, ["--target", target], root)
+    const blueprintFile = path.join(target, ".autopilot", "init", "blueprint.json")
+    const evolution = path.join(target, ".autopilot", "bin", "evolve-blueprint.mjs")
+    const renderer = path.join(target, ".autopilot", "bin", "render-blueprint.mjs")
+    await cp(fixture, blueprintFile, { force: true })
+    await mkdir(path.join(target, "src"), { recursive: true })
+    const applicationFile = path.join(target, "src", "existing.txt")
+    await writeFile(applicationFile, "preserve-application\n", "utf8")
+    nodeJson(renderer, ["--target", target], target)
+    nodeJson(evolution, ["initialize", "--root", target], target)
+
+    git(["config", "user.name", "Autopilot Test"], target)
+    git(["config", "user.email", "autopilot@example.invalid"], target)
+    git(["add", "-A"], target)
+    git(["commit", "-m", "initial fixed commit policy"], target)
+
+    const queueFile = path.join(target, ".project", "plan", "queue.json")
+    const receiptReadme = path.join(target, ".project", "receipts", "README.md")
+    const beforeQueue = await readFile(queueFile)
+    const beforeReceipt = await readFile(receiptReadme)
+
+    nodeJson(evolution, ["prepare", "--root", target], target)
+    const draft = path.join(target, ".autopilot", "evolution")
+    const candidateFile = path.join(draft, "candidate-blueprint.json")
+    const candidate = JSON.parse(await readFile(candidateFile, "utf8"))
+    candidate.schema_version = 6
+    candidate.git = { commit_prefixes: { M001: "fix(auth)" } }
+    await writeFile(candidateFile, `${JSON.stringify(candidate, null, 2)}\n`, "utf8")
+    await writeFile(path.join(draft, "request.json"), `${JSON.stringify({
+      schema_version: 1,
+      base_version: 1,
+      summary: "Adopt deterministic Conventional Commit types",
+      motivation: "Keep future local history descriptive without runtime classification.",
+      requested_changes: ["Map each task to a validated Conventional Commit prefix"],
+    }, null, 2)}\n`, "utf8")
+
+    const questions = nodeJson(evolution, ["questions", "--root", target], target)
+    assert.deepEqual(questions.questions, [])
+    const planned = nodeJson(evolution, ["plan", "--root", target], target)
+    assert.equal(planned.classification, "A")
+    assert.equal(planned.compatibility, "non_breaking")
+    assert.equal(planned.risk, "low")
+    assert.deepEqual(planned.added_tasks, [])
+
+    const applied = nodeJson(evolution, [
+      "apply", "--root", target, "--version", "2", "--approve", planned.approval_token,
+    ], target)
+    assert.equal(applied.activated_version, 2)
+    assert.equal(applied.destructive_application_changes_performed, false)
+    const config = JSON.parse(await readFile(path.join(target, ".autopilot", "config.json"), "utf8"))
+    assert.equal(config.schema_version, 2)
+    assert.deepEqual(config.git.commit_prefixes, { M001: "fix(auth)" })
+    assert.deepEqual(await readFile(queueFile), beforeQueue)
+    assert.deepEqual(await readFile(receiptReadme), beforeReceipt)
+    assert.equal(await readFile(applicationFile, "utf8"), "preserve-application\n")
+
+    const completedQueue = JSON.parse(await readFile(queueFile, "utf8"))
+    completedQueue.tasks.M001.status = "done"
+    await writeFile(queueFile, `${JSON.stringify(completedQueue, null, 2)}\n`, "utf8")
+    git(["add", "-A"], target)
+    git(["commit", "-m", "adopt mapped commit policy"], target)
+    await rm(draft, { recursive: true, force: true })
+    nodeJson(evolution, ["prepare", "--root", target], target)
+    const remapped = JSON.parse(await readFile(candidateFile, "utf8"))
+    remapped.git.commit_prefixes.M001 = "feat"
+    await writeFile(candidateFile, `${JSON.stringify(remapped, null, 2)}\n`, "utf8")
+    await writeFile(path.join(draft, "request.json"), `${JSON.stringify({
+      schema_version: 1,
+      base_version: 2,
+      summary: "Rename the completed task commit policy",
+      motivation: "Exercise completed-history protection.",
+      requested_changes: ["Change M001 from fix(auth) to feat"],
+    }, null, 2)}\n`, "utf8")
+    nodeJson(evolution, ["questions", "--root", target], target)
+    const immutable = run(process.execPath, [evolution, "plan", "--root", target, "--json"], target, { expected: 1 })
+    assert.match(immutable.stderr, /Completed task M001 cannot change its Conventional Commit prefix/i)
+
+    const downgrade = JSON.parse(await readFile(candidateFile, "utf8"))
+    downgrade.schema_version = 5
+    downgrade.git = { commit_prefix: "autopilot" }
+    await writeFile(candidateFile, `${JSON.stringify(downgrade, null, 2)}\n`, "utf8")
+    const rejected = run(process.execPath, [evolution, "questions", "--root", target, "--json"], target, { expected: 1 })
+    assert.match(rejected.stderr, /schema versions cannot move backward/i)
+  } finally {
+    await rm(target, { recursive: true, force: true })
+  }
+})
+
 test("a legacy initialized project is adopted as Blueprint v1 without rewriting existing files", async () => {
   const target = await mkdtemp(path.join(os.tmpdir(), "autopilot-evolution-adoption-"))
   try {

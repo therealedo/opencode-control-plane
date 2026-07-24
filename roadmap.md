@@ -38,9 +38,9 @@ The system should retain three clearly separated layers:
 
 Blueprint and migration history belong to the cold planning path. They must not be repeatedly loaded into the autonomous execution path.
 
-## Current baseline: v1.5.0
+## Current baseline: v1.6.0
 
-Version 1.5.0 provides:
+Version 1.6.0 provides:
 
 - modular, evolving blueprints;
 - deterministic scaffolding and upgrades;
@@ -61,6 +61,10 @@ Version 1.5.0 provides:
 - strict provider-event telemetry, per-dimension token/cost budgets, atomic resume state, and JSON plus Markdown results;
 - deterministic no-model simulation for release checks, while real model trials remain explicit opt-in work;
 - accurate public wording: local execution is policy-bounded and self-verifying, not an operating-system sandbox.
+- Blueprint schema 6 with deterministic per-task Conventional Commit prefixes and fixed controller bookkeeping;
+- zero-token commit selection from protected configuration rather than worker inference;
+- unchanged support for Blueprint schema 5 and fixed-prefix initialized projects;
+- a hash-verified, blueprint-preserving refresh that lets an older active interview finalize without restarting.
 
 The fixed-context measurement and simulated evaluation remain regression guards, not proof of end-to-end token savings or unchanged implementation quality. Controlled live trials across models are the next step before further prompt compression or reduced-review policy.
 

@@ -45,6 +45,8 @@ The fleet TUI checks only stable GitHub Releases with exact `vMAJOR.MINOR.PATCH`
 
 Removed release paths are retained instead of silently deleted. Configuration/state schema changes must be implemented as explicit ordered migrations; they must never be copied from the template.
 
+An older unfinished interview has one narrower exception to the clean-worktree rule. Immediately before finalization, its globally installed closeout script may refresh only manifest-owned framework files when the controller is idle, the queue is still initializing, no blueprint lifecycle exists, and every old ownership hash matches. The draft blueprint is compared byte-for-byte before and after, no upgrade commit is created, and the normal initialization baseline captures the refreshed framework. Any drift or partial lifecycle fails closed.
+
 `upgrade-all-projects.mjs` never passes `--adopt`. Versioned projects update independently; running workers drain cooperatively and resume only if they were live before the update. Missing, legacy, dirty, drifted, or interrupted projects remain named in the result. A rerun is the recovery mechanism for partial fleet completion.
 
 ## Compatibility namespaces

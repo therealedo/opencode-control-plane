@@ -12,6 +12,7 @@ import { taskEntries } from "./project.mjs";
 import { secretIndicators } from "./secrets.mjs";
 import { validateTaskToolGrants } from "./tool-grants.mjs";
 import { isForbiddenCredentialVariable } from "./mcp.mjs";
+import { normalizeGitCommitConfig } from "./commit-policy.mjs";
 
 export { isForbiddenCredentialVariable } from "./mcp.mjs";
 
@@ -133,10 +134,10 @@ function boundedString(issues, location, value, {
 export function validateConfig(config) {
   const issues = [];
   if (!object(config)) {
-    issue(issues, "config", "must be an object with schema_version 1");
+    issue(issues, "config", "must be an object with schema_version 1 or 2");
     return issues;
   }
-  if (config.schema_version !== 1) issue(issues, "config", "schema_version must be 1");
+  if (![1, 2].includes(config.schema_version)) issue(issues, "config", "schema_version must be 1 or 2");
   if (!object(config.opencode) || !stringArray(config.opencode.command) || config.opencode.command.length === 0) {
     issue(issues, "config.opencode.command", "must be a non-empty string array");
   } else {
@@ -246,7 +247,14 @@ export function validateConfig(config) {
   }
   if (config.git?.require_clean_start !== true) issue(issues, "config.git.require_clean_start", "must be true so pre-existing application changes cannot be absorbed into a task");
   if (typeof config.git?.local_commits !== "boolean") issue(issues, "config.git.local_commits", "must be boolean");
-  if (typeof config.git?.commit_prefix !== "string" || !config.git.commit_prefix.trim()) issue(issues, "config.git.commit_prefix", "must be non-empty");
+  try {
+    const commitPolicy = normalizeGitCommitConfig(config.git);
+    if (config.schema_version === 1 && commitPolicy.mode !== "fixed") {
+      issue(issues, "config.git.commit_prefixes", "requires config schema_version 2");
+    }
+  } catch (error) {
+    issue(issues, "config.git", error.message);
+  }
   if (!stringArray(config.git?.ephemeral_roots)) {
     issue(issues, "config.git.ephemeral_roots", "must be a literal project-relative directory array");
   } else {

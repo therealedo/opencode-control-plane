@@ -39,6 +39,10 @@ import {
   ROLE_NAMES,
   validateRoleToolPolicy,
 } from "./tool-grants.mjs";
+import {
+  assertExactTaskPrefixCoverage,
+  normalizeGitCommitConfig,
+} from "./commit-policy.mjs";
 
 const PLACEHOLDERS = [
   { name: "bracket placeholder", pattern: /\[(?:insert|replace|describe|choose|todo|tbd|your\b)[^\]]*\]/gi },
@@ -621,7 +625,7 @@ async function validateBlueprintLifecycle(root, issues) {
     return;
   }
   if (
-    blueprint?.schema_version !== 5 || record?.schema_version !== 1 || record.status !== "active" ||
+    ![5, 6].includes(blueprint?.schema_version) || record?.schema_version !== 1 || record.status !== "active" ||
     memory?.schema_version !== 1 || history?.schema_version !== 1 ||
     !Number.isInteger(record.version) || record.version < 1 ||
     history.current_version !== record.version || memory.current_blueprint_version !== record.version
@@ -693,6 +697,18 @@ export async function validateProject(root, {
       issues,
       context_cap_bytes: null,
     };
+  }
+  try {
+    const commitPolicy = normalizeGitCommitConfig(project.config.git);
+    if (commitPolicy.mode === "mapped") {
+      assertExactTaskPrefixCoverage(
+        commitPolicy.prefixes,
+        Object.keys(queue.tasks),
+        "config.git.commit_prefixes",
+      );
+    }
+  } catch (error) {
+    issues.push({ severity: "error", location: "config.git", message: error.message });
   }
   if (state.active_task !== null && state.active_task !== undefined && !queue.tasks[state.active_task]) {
     issues.push({

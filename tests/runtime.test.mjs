@@ -212,6 +212,25 @@ test("controller completes task and project through fresh execute and review ses
   assert.equal(restartedState.status, "complete")
 })
 
+test("controller uses blueprint-compiled Conventional Commit prefixes without model classification", async (t) => {
+  const root = await createScaffold(t, { ready: true, mode: "success" })
+  const configFile = path.join(root, ".autopilot", "config.json")
+  const config = await readJson(configFile)
+  config.schema_version = 2
+  delete config.git.commit_prefix
+  config.git.commit_prefixes = { M001: "feat(opportunities)" }
+  await writeJson(configFile, config)
+  await git(root, ["add", ".autopilot/config.json"])
+  await git(root, ["commit", "-m", "test: configure Conventional Commit map"])
+
+  const result = await runAutopilot(root)
+  assert.equal(result.code, 0, result.stderr || result.stdout)
+  const subjects = (await git(root, ["log", "--format=%s"])).split(/\r?\n/)
+  assert.equal(subjects.filter((item) => item === "feat(opportunities): M001 Prove the autonomous runtime").length, 1)
+  assert.equal(subjects.filter((item) => item === "chore(control-plane): record M001").length, 1)
+  assert.equal(subjects.filter((item) => item === "chore(control-plane): complete project").length, 1)
+})
+
 test("detached controller preserves configured provider environment and selected MCP auth only", async (t) => {
   const root = await createScaffold(t, { ready: true, mode: "success" })
   const configFile = path.join(root, ".autopilot", "config.json")

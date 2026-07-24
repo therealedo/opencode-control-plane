@@ -267,7 +267,7 @@ const blueprintPath = path.join(assetRoot, ".autopilot", "init", "blueprint.json
 if (await exists(blueprintPath)) {
   try {
     const blueprint = JSON.parse(await readFile(blueprintPath, "utf8"))
-    if (blueprint.schema_version !== 5) errors.push("Template blueprint must use schema_version 5")
+    if (blueprint.schema_version !== 6) errors.push("Template blueprint must use schema_version 6")
     if (!Array.isArray(blueprint.product?.supported_languages)) {
       errors.push("Template blueprint must initialize supported languages")
     }
@@ -298,8 +298,8 @@ if (await exists(blueprintPath)) {
     })) {
       errors.push("Template blueprint must initialize all bounded controller budgets")
     }
-    if (JSON.stringify(blueprint.git) !== JSON.stringify({ commit_prefix: "autopilot" })) {
-      errors.push("Template blueprint must expose only the safe Git commit prefix")
+    if (JSON.stringify(blueprint.git) !== JSON.stringify({ commit_prefixes: { M001: "feat" } })) {
+      errors.push("Template blueprint must map each task to one deterministic Conventional Commit prefix")
     }
     if (JSON.stringify(blueprint.tooling?.gitignore) !== "[]" || JSON.stringify(blueprint.tooling?.ephemeral) !== "[]") {
       errors.push("Template blueprint must initialize stack ignores and ephemeral roots explicitly")

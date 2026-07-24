@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "metadata": {
     "description": "",
     "tags": []
@@ -131,7 +131,9 @@
     "max_no_progress": 2
   },
   "git": {
-    "commit_prefix": "autopilot"
+    "commit_prefixes": {
+      "M001": "feat"
+    }
   },
   "credentials": {
     "phase_profiles": {

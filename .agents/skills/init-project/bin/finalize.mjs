@@ -10,11 +10,11 @@ import {
   safeBaseEnv,
   sanitizeProcessResult,
 } from "../assets/project/.autopilot/bin/lib/process.mjs"
+import { controllerCommitMessage } from "../assets/project/.autopilot/bin/lib/commit-policy.mjs"
 
 const PROCESS_TIMEOUT_MS = 120_000
 const PROCESS_OUTPUT_BYTES = 1024 * 1024
 const ERROR_OUTPUT_BYTES = 8 * 1024
-const INITIAL_COMMIT_MESSAGE = "autopilot: initialize project blueprint"
 
 const args = parseArgs(process.argv.slice(2))
 const target = path.resolve(args.target ?? process.cwd())
@@ -140,7 +140,21 @@ async function createBaselineCommit(root) {
     if (tree.status !== 0 || !isObjectId(tree.stdout.trim())) {
       throw new Error(`Could not prepare the baseline Git tree${boundedDiagnostic(tree.stderr || tree.stdout)}`)
     }
-    await assertExactBaselineTree(root, tree.stdout.trim())
+    const treeId = tree.stdout.trim()
+    await assertExactBaselineTree(root, treeId)
+    const stagedConfig = await git(["show", `${treeId}:.autopilot/config.json`], root)
+    if (stagedConfig.status !== 0) {
+      throw new Error(`Could not read the baseline configuration from the prepared tree${boundedDiagnostic(stagedConfig.stderr || stagedConfig.stdout)}`)
+    }
+    let config
+    try {
+      config = JSON.parse(stagedConfig.stdout)
+    } catch (error) {
+      throw new Error(`Prepared baseline configuration is invalid JSON: ${error.message}`)
+    }
+    const initialCommitMessage = config.schema_version === 1
+      ? "autopilot: initialize project blueprint"
+      : controllerCommitMessage(config.git, "initialize project blueprint")
     const parent = await git(["rev-parse", "--verify", "--quiet", "HEAD"], root)
     if (![0, 1].includes(parent.status)) {
       throw new Error(`Could not inspect the baseline parent${boundedDiagnostic(parent.stderr || parent.stdout)}`)
@@ -149,9 +163,9 @@ async function createBaselineCommit(root) {
     if (parentCommit !== null && !isObjectId(parentCommit)) {
       throw new Error("Git returned an invalid baseline parent object ID")
     }
-    const commitArgs = ["commit-tree", tree.stdout.trim()]
+    const commitArgs = ["commit-tree", treeId]
     if (parentCommit !== null) commitArgs.push("-p", parentCommit)
-    const committed = await git(commitArgs, root, { input: `${INITIAL_COMMIT_MESSAGE}\n` })
+    const committed = await git(commitArgs, root, { input: `${initialCommitMessage}\n` })
     if (committed.status !== 0) {
       throw new Error(
         `Initial local commit failed. Configure a repository Git identity and rerun finalize.mjs${boundedDiagnostic(committed.stderr || committed.stdout)}`,
@@ -161,7 +175,7 @@ async function createBaselineCommit(root) {
     if (!isObjectId(plannedCommit)) throw new Error("git commit-tree returned an invalid object ID")
     const expectedOld = parentCommit ?? "0".repeat(plannedCommit.length)
     const updated = await git(
-      ["update-ref", "-m", INITIAL_COMMIT_MESSAGE, "HEAD", plannedCommit, expectedOld],
+      ["update-ref", "-m", initialCommitMessage, "HEAD", plannedCommit, expectedOld],
       root,
     )
     if (updated.status !== 0) {

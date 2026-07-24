@@ -690,6 +690,9 @@ async function loadDraft() {
   ])
   assertBlueprintShape(base)
   assertBlueprintShape(candidate)
+  if (candidate.schema_version < base.schema_version) {
+    throw new Error("Blueprint schema versions cannot move backward")
+  }
   if (request.schema_version !== 1 || answers.schema_version !== 1) throw new Error("Evolution draft schemas are invalid")
   return { base, candidate, request, answers }
 }
@@ -715,14 +718,19 @@ function classifyChanges(changes) {
   return changes.map((change) => {
     let category = "B"
     let action = "create_implementation_tasks"
-    if (change.path.startsWith("/metadata/")) {
+    if (
+      change.path === "/schema_version" ||
+      change.path.startsWith("/metadata/") ||
+      change.path === "/git" ||
+      change.path.startsWith("/git/")
+    ) {
       category = "A"
       action = "update_blueprint_metadata_only"
     } else if (
       change.path.startsWith("/product/supported_languages") ||
       change.path.startsWith("/architecture/") ||
       /^\/constraints\/(?:runtime|compatibility|compliance|prohibited_changes)/.test(change.path) ||
-      /^\/(?:tooling|gates|final_gates|tools|opencode|credentials|mcp|git|context)\b/.test(change.path)
+      /^\/(?:tooling|gates|final_gates|tools|opencode|credentials|mcp|context)\b/.test(change.path)
     ) {
       category = "C"
       action = "revise_blueprint_and_generate_migration"
@@ -830,8 +838,11 @@ function buildImpact(base, candidate, changes, preview) {
 }
 
 function buildMigrationPlan({ version, baseVersion, request, answers, changes, impact, preview, addedTasks }) {
-  const riskyText = `${request.summary} ${stableJson(changes)}`
-  const risk = /database|authentication|auth|security|infrastructure|destructive/i.test(riskyText) || preview.deleted.length > 0
+  const substantiveChanges = changes.filter((item) => item.category !== "A")
+  const riskyText = `${request.summary} ${stableJson(substantiveChanges)}`
+  const risk = substantiveChanges.length > 0 && (
+    /database|authentication|auth|security|infrastructure|destructive/i.test(riskyText) || preview.deleted.length > 0
+  )
     ? "high"
     : changes.some((item) => item.category === "C") ? "medium" : "low"
   return {
@@ -1086,7 +1097,9 @@ function highestCategory(changes) {
 }
 
 function assertBlueprintShape(value) {
-  if (!isObject(value) || value.schema_version !== 5) throw new Error("Blueprint must use schema_version 5")
+  if (!isObject(value) || ![5, 6].includes(value.schema_version)) {
+    throw new Error("Blueprint must use schema_version 5 or 6")
+  }
   if (!isObject(value.metadata) || !isObject(value.product) || !isObject(value.architecture)) {
     throw new Error("Blueprint is missing product or architecture contracts")
   }

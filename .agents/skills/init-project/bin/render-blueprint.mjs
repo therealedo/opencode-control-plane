@@ -21,6 +21,10 @@ import {
   isForbiddenCredentialVariable,
   universalTerminalTaskId,
 } from "../assets/project/.autopilot/bin/lib/contracts.mjs"
+import {
+  assertExactTaskPrefixCoverage,
+  normalizeTaskCommitPrefixes,
+} from "../assets/project/.autopilot/bin/lib/commit-policy.mjs"
 import { validateMcpDescriptors } from "../assets/project/.autopilot/bin/lib/mcp.mjs"
 import {
   BASE_GITIGNORE_FRAGMENT,
@@ -182,8 +186,8 @@ function parseArgs(argv) {
 
 function validateBlueprint(value) {
   if (!plainObject(value)) throw new Error("blueprint must be an object")
-  if (value.schema_version !== 5) {
-    throw new Error("blueprint.schema_version must be 5; older schemas do not contain versioned evolution metadata")
+  if (![5, 6].includes(value.schema_version)) {
+    throw new Error("blueprint.schema_version must be 5 or 6; older schemas do not contain versioned evolution metadata")
   }
   exactObject(value, [
     "schema_version", "metadata", "product", "architecture", "constraints", "autonomy",
@@ -209,11 +213,14 @@ function validateBlueprint(value) {
   const tools = validateTools(value.tools)
   const opencode = validateOpenCode(value.opencode)
   const budgets = validateBudgets(value.budgets)
-  const git = validateGit(value.git)
+  const git = validateGit(value.git, value.schema_version)
   const credentials = validateCredentials(value.credentials)
   const mcp = validateMcp(value.mcp, opencode.provider_environment)
   const roadmap = validateRoadmap(value.roadmap)
   const tasks = validateTasks(value.tasks, context, gates, tools, mcp, tooling.ephemeral)
+  if (git.commit_prefixes) {
+    assertExactTaskPrefixCoverage(git.commit_prefixes, tasks.map((task) => task.id), "blueprint.git.commit_prefixes")
+  }
 
   for (const id of finalGates) {
     if (!Object.hasOwn(gates, id)) throw new Error(`blueprint.final_gates references unknown gate ${id}`)
@@ -226,7 +233,7 @@ function validateBlueprint(value) {
   validateCredentialReferences(credentials, gates, mcp, tools, tasks)
 
   const normalized = {
-    schema_version: 5,
+    schema_version: value.schema_version,
     metadata,
     product,
     architecture,
@@ -597,13 +604,19 @@ function validateBudgets(value) {
   ]))
 }
 
-function validateGit(value) {
-  exactObject(value, ["commit_prefix"], "blueprint.git")
-  const commitPrefix = textValue(value.commit_prefix, "blueprint.git.commit_prefix", { singleLine: true })
-  if (Buffer.byteLength(commitPrefix, "utf8") > 128) {
-    throw new Error("blueprint.git.commit_prefix exceeds 128 bytes")
+function validateGit(value, schemaVersion) {
+  if (schemaVersion === 5 || Object.hasOwn(value ?? {}, "commit_prefix")) {
+    exactObject(value, ["commit_prefix"], "blueprint.git")
+    const commitPrefix = textValue(value.commit_prefix, "blueprint.git.commit_prefix", { singleLine: true })
+    if (Buffer.byteLength(commitPrefix, "utf8") > 128) {
+      throw new Error("blueprint.git.commit_prefix exceeds 128 bytes")
+    }
+    return { commit_prefix: commitPrefix }
   }
-  return { commit_prefix: commitPrefix }
+  exactObject(value, ["commit_prefixes"], "blueprint.git")
+  return {
+    commit_prefixes: normalizeTaskCommitPrefixes(value.commit_prefixes, "blueprint.git.commit_prefixes"),
+  }
 }
 
 function validateCredentials(value) {
@@ -949,10 +962,14 @@ async function createRenderPlan(root, blueprint, { evolve = false, evolutionBase
     queueTasks[task.id] = generated
     addDesired(`.project/plan/milestones/${task.id}.md`, renderTask(task))
   }
+  const projectStatus = Object.values(queueTasks).every((task) => task.status === "done") ? "complete" : "ready"
+  const queueChanged = !evolve ||
+    stableJson(existingQueue.tasks) !== stableJson(queueTasks) ||
+    existingQueue.project_status !== projectStatus
   const queueContent = jsonText({
     schema_version: 2,
-    revision: evolve ? Number(existingQueue.revision ?? 0) + 1 : 0,
-    project_status: Object.values(queueTasks).every((task) => task.status === "done") ? "complete" : "ready",
+    revision: evolve && queueChanged ? Number(existingQueue.revision ?? 0) + 1 : Number(existingQueue?.revision ?? 0),
+    project_status: projectStatus,
     tasks: queueTasks,
   })
   addDesired(".project/plan/queue.json", queueContent)
@@ -992,6 +1009,17 @@ async function createRenderPlan(root, blueprint, { evolve = false, evolutionBase
   ) {
     throw new Error(".autopilot/config.json phase credentials conflict with the blueprint")
   }
+  if (evolve && plainObject(config.git?.commit_prefixes) && plainObject(blueprint.git.commit_prefixes)) {
+    for (const [taskId, task] of Object.entries(existingQueue.tasks ?? {})) {
+      if (
+        task?.status === "done" &&
+        config.git.commit_prefixes[taskId] !== blueprint.git.commit_prefixes[taskId]
+      ) {
+        throw new Error(`Completed task ${taskId} cannot change its Conventional Commit prefix`)
+      }
+    }
+  }
+  config.schema_version = blueprint.schema_version >= 6 ? 2 : 1
   config.opencode.model = blueprint.opencode.model
   config.opencode.provider_auth_mode = blueprint.opencode.provider_auth_mode
   config.opencode.provider_environment = blueprint.opencode.provider_environment
@@ -1004,7 +1032,7 @@ async function createRenderPlan(root, blueprint, { evolve = false, evolutionBase
   config.git = {
     require_clean_start: true,
     local_commits: true,
-    commit_prefix: blueprint.git.commit_prefix,
+    ...blueprint.git,
     ephemeral_roots: blueprint.tooling.ephemeral,
   }
   config.context = { max_bytes: blueprint.context.max_bytes }

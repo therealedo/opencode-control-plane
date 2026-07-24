@@ -4,7 +4,11 @@
 
 `/init-project` asks focused questions and records answers only in `.autopilot/init/blueprint.json`. Deterministic scripts render the modular project files, create Blueprint v1, store project memory, validate the plan, commit a baseline, and remove the initialization draft.
 
-The blueprint records product outcome, users, scope, languages, architecture decisions, rejected alternatives, dependencies, generated components, environment-variable names, credentials metadata, tools, MCP descriptors, gates, budgets, roadmap, and dependency-ordered tasks. Secret values never belong in it.
+The blueprint records product outcome, users, scope, languages, architecture decisions, rejected alternatives, dependencies, generated components, environment-variable names, credentials metadata, tools, MCP descriptors, gates, budgets, roadmap, dependency-ordered tasks, and Git commit policy. Secret values never belong in it.
+
+Schema 6 supports either one fixed `git.commit_prefix` or a compact `git.commit_prefixes` map covering every task ID. Mapped values use `feat|fix|refactor|test|docs|chore|ci|build|security` with an optional lowercase scope. The mapping is compiled into protected controller configuration, not the queue or worker context. Schema-5 fixed-prefix blueprints remain supported unchanged.
+
+Changing only the commit policy after initialization is a nonbreaking Category-A blueprint revision: it creates a new Blueprint version without inventing an application task. Completed tasks keep their original mapping, schema versions never move backward, and only future commits use the revised policy.
 
 ## Evolution after initialization
 
