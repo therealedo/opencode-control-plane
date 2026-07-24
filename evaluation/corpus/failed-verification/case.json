@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "failed-verification",
+  "title": "Commission calculation after gate feedback",
+  "scenario": "failed_verification",
+  "task_file": "task.md",
+  "seed_directory": "seed",
+  "solution_directory": "solution",
+  "allowed_changed_paths": ["src/commission.mjs"],
+  "simulation": {
+    "interrupt_after_phase": null,
+    "forced_gate_failures": 1
+  },
+  "verification": {
+    "gate": "evaluation/gates/verify-case.mjs"
+  }
+}

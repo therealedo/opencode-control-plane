@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "profile_id": "local-baseline",
+  "model": "provider/model",
+  "variant": null,
+  "opencode_command": ["opencode"],
+  "provider_auth_mode": "auth_file",
+  "provider_environment": [],
+  "strategies": ["direct", "fresh_loop", "control_plane"],
+  "cases": [
+    "greenfield",
+    "feature",
+    "bug-repair",
+    "external-integration",
+    "blueprint-migration",
+    "interruption-recovery",
+    "failed-verification"
+  ],
+  "repetitions": 1,
+  "attempt_limit": 3,
+  "timeout_seconds": 1800,
+  "max_output_bytes": 16777216,
+  "keep_test_projects": false,
+  "require_complete_usage": true,
+  "budgets": {
+    "max_trials": 21,
+    "max_elapsed_minutes": 480,
+    "max_provider_cost": 25,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 250000,
+    "max_reasoning_tokens": 250000,
+    "max_cache_read_tokens": 1000000,
+    "max_cache_write_tokens": 1000000
+  }
+}

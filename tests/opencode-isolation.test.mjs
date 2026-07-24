@@ -349,18 +349,23 @@ if (sessionOutputMode === "nested") {
   process.stdout.write(JSON.stringify({ type: "session", payload: { sessionID } }) + "\n")
 } else {
   process.stdout.write(JSON.stringify({ type: "session", sessionID }) + "\n")
-  for (const event of [
+  const events = [
     { type: "step_finish", sessionID, part: firstUsage },
     { type: "step_finish", sessionID, part: firstUsage },
     { type: "step_finish", sessionID, part: usagePart("part-2", 30, 4, 1, 20, 0, 0.375) },
-    { type: "step_finish", sessionID, part: usagePart("part-malformed", -1, 9, 9, 9, 9, 9) },
-    { type: "step_finish", sessionID, part: usagePart("part-over-cost", 9, 9, 9, 9, 9, 1000001) },
-    { type: "step_finish", sessionID, part: { ...usagePart("part-mismatch", 999, 999, 999, 999, 999, 999), sessionID: "other-session" } },
-    { type: "step_finish", part: usagePart("part-missing-session", 999, 999, 999, 999, 999, 999) },
-    { type: "noise", sessionID, payload: { type: "step_finish", part: usagePart("part-nested", 999, 999, 999, 999, 999, 999) } },
-  ]) process.stdout.write(JSON.stringify(event) + "\n")
+    { type: "noise", sessionID, payload: { status: "ok" } },
+  ]
+  if (sessionOutputMode === "missing-session") {
+    events.push({ type: "step_finish", part: usagePart("part-missing-session", 9, 9, 9, 9, 9, 9) })
+  } else if (sessionOutputMode === "over-cost") {
+    events.push({ type: "step_finish", sessionID, part: usagePart("part-over-cost", 9, 9, 9, 9, 9, 1000001) })
+  } else if (sessionOutputMode === "conflicting") {
+    events.push({ type: "step_finish", sessionID, part: usagePart("part-1", 100, 21, 5, 50, 10, 0.125) })
+  }
+  for (const event of events) process.stdout.write(JSON.stringify(event) + "\n")
+  if (sessionOutputMode === "malformed") process.stdout.write("{malformed-json\n")
+  if (sessionOutputMode === "truncated") process.stdout.write("x".repeat(3 * 1024 * 1024))
 }
-process.stdout.write("{malformed-json\n")
 
 async function writeJson(file, value) {
   await writeFile(file, JSON.stringify(value, null, 2) + "\n", "utf8")
@@ -1366,7 +1371,7 @@ test("unselected provider auth entries are not exposed to a phase", async (t) =>
   await assert.rejects(access(path.join(root, ".autopilot", "runtime", "isolation-observations.json")))
 })
 
-test("fresh launcher records bounded model usage and ignores malformed or duplicate events", async (t) => {
+test("fresh launcher records bounded model usage, deduplicates identical parts, and rejects invalid telemetry", async (t) => {
   const root = await createScaffold(t, { ready: true })
   await configureIsolationProject(t, root)
   const environment = await sterileControllerEnvironment(root)
@@ -1412,14 +1417,35 @@ test("fresh launcher records bounded model usage and ignores malformed or duplic
         (error) => error?.code === "OPENCODE_TOOL_USAGE_INVALID",
       )
     }
+    await rm(path.join(root, ".autopilot", "runtime", "invalid-tool-usage.txt"), { force: true })
+    const telemetryModeFile = path.join(root, ".autopilot", "runtime", "session-output-mode.txt")
+    for (const [index, [mode, expectedCode]] of [
+      ["malformed", "OPENCODE_USAGE_INVALID"],
+      ["missing-session", "OPENCODE_USAGE_INVALID"],
+      ["over-cost", "OPENCODE_USAGE_INVALID"],
+      ["conflicting", "OPENCODE_USAGE_INVALID"],
+      ["truncated", "OPENCODE_OUTPUT_TRUNCATED"],
+    ].entries()) {
+      const attempt = index + 5
+      await writeFile(telemetryModeFile, `${mode}\n`, "utf8")
+      await assert.rejects(
+        isolatedModule.runFreshOpenCode(
+          project,
+          `Stage: execute\nTask: M001\nAttempt: ${attempt}\n`,
+          { phase: "execute", taskId: "M001", attempt, baseline },
+        ),
+        (error) => error?.code === expectedCode,
+      )
+    }
+    await rm(telemetryModeFile, { force: true })
     await assert.rejects(
       isolatedModule.runFreshOpenCode(
         project,
-        "Stage: execute\nTask: M001\nAttempt: 5\n",
+        "Stage: execute\nTask: M001\nAttempt: 10\n",
         {
           phase: "execute",
           taskId: "M001",
-          attempt: 5,
+          attempt: 10,
           baseline,
           captureEphemeralSecrets: () => { throw new Error("injected capture failure") },
         },

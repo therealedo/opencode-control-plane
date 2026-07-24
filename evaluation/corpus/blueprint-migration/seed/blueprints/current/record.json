@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "initialized_at": "2026-01-01T00:00:00.000Z",
+  "migration_history": [
+    {
+      "from_version": 1,
+      "to_version": 2,
+      "classification": "architecture",
+      "compatibility": "breaking"
+    }
+  ]
+}

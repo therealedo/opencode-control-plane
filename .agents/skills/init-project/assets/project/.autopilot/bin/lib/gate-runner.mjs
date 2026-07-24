@@ -554,6 +554,7 @@ async function sterileGateEnvironment(project, injected) {
   const cache = path.join(home, ".cache");
   const data = path.join(home, ".local", "share");
   const state = path.join(home, ".local", "state");
+  const moduleCache = path.join(home, "powershell", "ModuleAnalysisCache");
   await Promise.all([
     mkdir(roaming, { recursive: true }),
     mkdir(local, { recursive: true }),
@@ -562,6 +563,7 @@ async function sterileGateEnvironment(project, injected) {
     mkdir(cache, { recursive: true }),
     mkdir(data, { recursive: true }),
     mkdir(state, { recursive: true }),
+    mkdir(path.dirname(moduleCache), { recursive: true }),
   ]);
   return {
     home,
@@ -574,6 +576,7 @@ async function sterileGateEnvironment(project, injected) {
       TEMP: temporary,
       TMP: temporary,
       TMPDIR: temporary,
+      PSModuleAnalysisCachePath: moduleCache,
       XDG_CONFIG_HOME: config,
       XDG_CACHE_HOME: cache,
       XDG_DATA_HOME: data,

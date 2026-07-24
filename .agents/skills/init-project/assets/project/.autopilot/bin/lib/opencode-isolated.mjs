@@ -271,7 +271,7 @@ function parseSessionId(output) {
 }
 
 function parseModelUsage(output, sessionId) {
-  const seenPartIds = new Set();
+  const seenParts = new Map();
   const totals = {
     input_tokens: 0,
     output_tokens: 0,
@@ -281,19 +281,42 @@ function parseModelUsage(output, sessionId) {
     cost: 0,
   };
   let observed = false;
+  let lineNumber = 0;
   for (const line of output.split(/\r?\n/)) {
+    lineNumber += 1;
+    if (!line.trim()) continue;
     let event;
     try { event = JSON.parse(line); }
-    catch { continue; }
-    if (!plainObject(event) || event.type !== "step_finish" || event.sessionID !== sessionId) continue;
+    catch {
+      throw new AutopilotError("Fresh OpenCode JSON output contains malformed telemetry", {
+        code: "OPENCODE_USAGE_INVALID",
+        details: { line: lineNumber },
+      });
+    }
+    if (
+      !plainObject(event) || typeof event.type !== "string" || !event.type ||
+      typeof event.sessionID !== "string" || event.sessionID !== sessionId
+    ) {
+      throw new AutopilotError("Fresh OpenCode JSON output has an invalid telemetry envelope", {
+        code: "OPENCODE_USAGE_INVALID",
+        details: { line: lineNumber },
+      });
+    }
+    if (event.type !== "step_finish") continue;
     const part = event.part;
     if (
       !plainObject(part) || part.type !== "step-finish" || part.sessionID !== sessionId ||
       typeof part.id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(part.id) ||
+      typeof part.messageID !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(part.messageID) ||
       !plainObject(part.tokens) || !plainObject(part.tokens.cache) ||
       typeof part.cost !== "number" || !Number.isFinite(part.cost) ||
       part.cost < 0 || part.cost > MAX_PHASE_MODEL_COST
-    ) continue;
+    ) {
+      throw new AutopilotError("Fresh OpenCode step-finish telemetry is invalid", {
+        code: "OPENCODE_USAGE_INVALID",
+        details: { line: lineNumber },
+      });
+    }
     const values = {
       input_tokens: part.tokens.input,
       output_tokens: part.tokens.output,
@@ -301,8 +324,32 @@ function parseModelUsage(output, sessionId) {
       cache_read_tokens: part.tokens.cache.read,
       cache_write_tokens: part.tokens.cache.write,
     };
-    if (Object.values(values).some((value) => !Number.isSafeInteger(value) || value < 0)) continue;
-    if (seenPartIds.has(part.id)) continue;
+    if (
+      Object.values(values).some((value) => !Number.isSafeInteger(value) || value < 0) ||
+      (part.tokens.total !== undefined && (!Number.isSafeInteger(part.tokens.total) || part.tokens.total < 0))
+    ) {
+      throw new AutopilotError("Fresh OpenCode token dimensions are invalid", {
+        code: "OPENCODE_USAGE_INVALID",
+        details: { line: lineNumber, part_id: part.id },
+      });
+    }
+    const fingerprint = JSON.stringify({
+      session_id: sessionId,
+      part_id: part.id,
+      message_id: part.messageID,
+      values,
+      cost: part.cost,
+      total: part.tokens.total ?? null,
+    });
+    if (seenParts.has(part.id)) {
+      if (seenParts.get(part.id) !== fingerprint) {
+        throw new AutopilotError("Fresh OpenCode reused a telemetry part ID with conflicting usage", {
+          code: "OPENCODE_USAGE_INVALID",
+          details: { line: lineNumber, part_id: part.id },
+        });
+      }
+      continue;
+    }
     const nextCost = totals.cost + part.cost;
     const nextTokens = Object.fromEntries(
       Object.keys(values).map((field) => [field, totals[field] + values[field]]),
@@ -310,8 +357,13 @@ function parseModelUsage(output, sessionId) {
     if (
       !Number.isFinite(nextCost) || nextCost > MAX_PHASE_MODEL_COST ||
       Object.values(nextTokens).some((value) => !Number.isSafeInteger(value))
-    ) continue;
-    seenPartIds.add(part.id);
+    ) {
+      throw new AutopilotError("Fresh OpenCode usage aggregation overflowed its phase boundary", {
+        code: "OPENCODE_USAGE_INVALID",
+        details: { line: lineNumber, part_id: part.id },
+      });
+    }
+    seenParts.set(part.id, fingerprint);
     Object.assign(totals, nextTokens, { cost: nextCost });
     observed = true;
   }
@@ -1019,7 +1071,7 @@ export async function preflightFreshOpenCode(project, {
     });
   }
   if (settings.attach_url) {
-    throw new AutopilotError("Attached OpenCode servers cannot provide phase isolation", {
+    throw new AutopilotError("Attached OpenCode servers cannot provide the required fresh-process phase boundary", {
       code: "PROJECT_INVALID",
     });
   }
@@ -1103,16 +1155,19 @@ export async function preflightOpenCodeCommand(project) {
     const temp = path.join(neutral, "tmp");
     const appData = path.join(home, "AppData", "Roaming");
     const localAppData = path.join(home, "AppData", "Local");
+    const moduleCache = path.join(neutral, "powershell", "ModuleAnalysisCache");
     await Promise.all([
       mkdir(home, { recursive: true }), mkdir(config, { recursive: true }),
       mkdir(data, { recursive: true }), mkdir(cache, { recursive: true }),
       mkdir(state, { recursive: true }), mkdir(temp, { recursive: true }),
       mkdir(appData, { recursive: true }), mkdir(localAppData, { recursive: true }),
+      mkdir(path.dirname(moduleCache), { recursive: true }),
     ]);
     const probeEnvironment = {
       ...trusted.environment,
       HOME: home, USERPROFILE: home, APPDATA: appData, LOCALAPPDATA: localAppData,
       TEMP: temp, TMP: temp, TMPDIR: temp,
+      PSModuleAnalysisCachePath: moduleCache,
       XDG_CONFIG_HOME: config, XDG_DATA_HOME: data, XDG_CACHE_HOME: cache, XDG_STATE_HOME: state,
       OPENCODE_CONFIG_DIR: path.join(config, "opencode"),
       OPENCODE_CONFIG_CONTENT: JSON.stringify({
@@ -1227,6 +1282,7 @@ async function prepareSterilePhase(project, {
   const xdgCache = path.join(sterile, "xdg-cache");
   const xdgState = path.join(sterile, "xdg-state");
   const launchCwd = path.join(sterile, "launch-cwd");
+  const moduleCache = path.join(sterile, "powershell", "ModuleAnalysisCache");
   const removeSterile = async () => {
     await assertPrivateOpenCodeRuntime(project, sterile, "phase");
     await rm(sterile, { recursive: true, force: true });
@@ -1239,6 +1295,7 @@ async function prepareSterilePhase(project, {
     mkdir(path.join(xdgData, "opencode"), { recursive: true }),
     mkdir(xdgCache, { recursive: true }), mkdir(xdgState, { recursive: true }),
     mkdir(launchCwd, { recursive: true }),
+    mkdir(path.dirname(moduleCache), { recursive: true }),
   ]);
 
   await Promise.all([
@@ -1338,6 +1395,7 @@ async function prepareSterilePhase(project, {
     HOME: home, USERPROFILE: home,
     APPDATA: path.join(home, "AppData", "Roaming"), LOCALAPPDATA: path.join(home, "AppData", "Local"),
     TEMP: path.join(home, "tmp"), TMP: path.join(home, "tmp"), TMPDIR: path.join(home, "tmp"),
+    PSModuleAnalysisCachePath: moduleCache,
     XDG_CONFIG_HOME: xdgConfig, XDG_DATA_HOME: xdgData, XDG_CACHE_HOME: xdgCache, XDG_STATE_HOME: xdgState,
     OPENCODE_CONFIG_DIR: profile, OPENCODE_CONFIG_CONTENT: JSON.stringify(isolatedConfig),
     OPENCODE_DISABLE_PROJECT_CONFIG: "1", OPENCODE_PURE: "1",

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "external-integration",
+  "title": "Zoho CRM adapter with injected transport",
+  "scenario": "external_integration",
+  "task_file": "task.md",
+  "seed_directory": "seed",
+  "solution_directory": "solution",
+  "allowed_changed_paths": ["src/crm/zoho.mjs"],
+  "simulation": {
+    "interrupt_after_phase": null,
+    "forced_gate_failures": 0
+  },
+  "verification": {
+    "gate": "evaluation/gates/verify-case.mjs"
+  }
+}

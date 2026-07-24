@@ -54,12 +54,13 @@ test("dashboard strips terminal control input and renders the public identity", 
       blocker: { message: injected },
       task_counts: { done: 1, blocked: 1 },
     },
-    metadata: { installed_version: "1.4.5", blueprint_version: 2, runtime_variant: "high" },
+    metadata: { installed_version: "1.5.0", blueprint_version: 2, runtime_variant: "high" },
     width: 88,
   });
   assert.match(rendered, /^OpenCode Control Plane/m);
-  assert.match(rendered, /zero-token orchestrator that turns OpenCode/);
+  assert.match(rendered, /zero-token orchestrator that turns OpenCode into a policy-bounded/);
   assert.match(rendered, /Keeping it lean, fast, and terminal-native is its superpower/);
+  assert.doesNotMatch(rendered, /\bsandboxed\b/i);
   assert.doesNotMatch(rendered, /\x1b|\x07/);
 });
 
@@ -70,7 +71,7 @@ test("noninteractive dashboard snapshot reports version, state, and visible acti
   assert.equal(result.code, 0, result.stderr);
   const snapshot = JSON.parse(result.stdout);
   assert.equal(snapshot.status.status, "idle");
-  assert.equal(snapshot.metadata.installed_version, "1.4.5");
+  assert.equal(snapshot.metadata.installed_version, "1.5.0");
   assert.equal(snapshot.metadata.runtime_variant, "default");
   assert.equal(snapshot.actions.length, 8);
   assert.equal(snapshot.actions[0].id, "start");

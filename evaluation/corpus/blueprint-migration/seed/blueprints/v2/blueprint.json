@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "based_on": 1,
+  "supported_languages": ["en", "es"],
+  "architecture": {
+    "crm": "Zoho CRM",
+    "dialer": "Kixie",
+    "authentication": "Existing authentication",
+    "database": "PostgreSQL"
+  }
+}

@@ -109,7 +109,7 @@ export function renderDashboard({ status = {}, metadata = {}, activity = [], mes
   const line = "-".repeat(usable);
   const output = [
     "OpenCode Control Plane",
-    fit("a high-efficiency, zero-token orchestrator that turns OpenCode into a sandboxed, self-verifying coding worker.", usable),
+    fit("a high-efficiency, zero-token orchestrator that turns OpenCode into a policy-bounded, self-verifying coding worker.", usable),
     fit("Keeping it lean, fast, and terminal-native is its superpower", usable),
     line,
     pair("Controller", stale ? `${mode.label} (status stale)` : mode.label, usable),

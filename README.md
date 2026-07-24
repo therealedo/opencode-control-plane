@@ -1,6 +1,6 @@
 # OpenCode Control Plane
 
-> a high-efficiency, zero-token orchestrator that turns OpenCode into a sandboxed, self-verifying coding worker. Keeping it lean, fast, and terminal-native is its superpower
+> a high-efficiency, zero-token orchestrator that turns OpenCode into a policy-bounded, self-verifying coding worker. Keeping it lean, fast, and terminal-native is its superpower
 
 Describe a project once. OpenCode Control Plane divides the work into small tasks, starts fresh coding and review sessions, runs tests, recovers from context limits, and keeps working until it reaches a real human boundary.
 
@@ -36,7 +36,7 @@ If setup says the command folder is not on your PATH, add the exact folder it pr
 
 When the interview is complete, deterministic scripts create the modular project files, Blueprint v1, tests and worker configuration, commit a clean baseline, register the project, and check readiness. They deliberately stop before the first worker starts.
 
-Open `control-plane` in another terminal, select the project, choose **Worker reasoning** until the desired model variant is shown, then choose **Start worker**. This setting applies to every fresh autonomous worker; changing `/variants` in the interview session alone does not carry into those isolated sessions.
+Open `control-plane` in another terminal, select the project, choose **Worker reasoning** until the desired model variant is shown, then choose **Start worker**. This setting applies to every fresh autonomous worker; changing `/variants` in the interview session alone does not carry into those fresh worker sessions.
 
 ## Monitor every project
 
@@ -101,7 +101,9 @@ Then reopen the terminal, run `control-plane`, choose **Add project**, and selec
 
 Store real test credentials only in the ignored local environment file selected during initialization. The blueprint, prompts, project memory, Git history, receipts, screenshots, and registry must contain names only.
 
-Use limited test tenants—not production or personal accounts. A credential is exposed only to the approved gate or integration that needs it.
+Use limited test tenants—not production or personal accounts. Control Plane injects a credential only into the approved gate or integration scope that needs it.
+
+Local workers are policy-bounded, not operating-system sandboxed. OpenCode and programs launched by tests retain your operating-system account's access; use a container, VM, restricted account, and network controls for untrusted toolchains.
 
 ## How it stays efficient
 
@@ -128,15 +130,19 @@ Use limited test tenants—not production or personal accounts. A credential is 
 Keep the system dependency-free and put deterministic work in scripts. Every behavior release must use the same version in `package.json` and `control-plane-release.json`, a matching `vMAJOR.MINOR.PATCH` Git tag, and a stable GitHub Release.
 
 ```text
+node scripts/evaluate.mjs --simulate
 npm run check
 npm run upgrade -- --local --all-projects
 ```
+
+The evaluation command above uses only disposable fake-worker projects and no model. Live provider comparisons are a separate explicit, budgeted maintainer action; see the evaluation guide.
 
 More detail:
 
 - [Product roadmap](roadmap.md)
 - [Architecture and context lifecycle](docs/architecture.md)
 - [Token-efficiency design and measurements](docs/token-efficiency.md)
+- [Disposable evaluation and live comparison](docs/evaluation.md)
 - [Blueprint initialization and evolution](docs/blueprints.md)
 - [Security boundaries](docs/security.md)
 - [Maintenance and releases](docs/maintenance.md)

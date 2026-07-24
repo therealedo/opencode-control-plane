@@ -234,9 +234,13 @@ if (stage === "execute") {
   })
 }
 
-process.stdout.write("credential-output=" + exposed + "\n")
-process.stderr.write("credential-error=" + exposed + "\n")
 const sessionId = "credential-" + stage + "-a" + attempt + "-p" + process.pid
+process.stdout.write(JSON.stringify({
+  type: "text",
+  sessionID: sessionId,
+  content: "credential-output=" + exposed,
+}) + "\n")
+process.stderr.write("credential-error=" + exposed + "\n")
 process.stdout.write(JSON.stringify({ type: "session", sessionID: sessionId }) + "\n")
 
 if (stage === "review") {

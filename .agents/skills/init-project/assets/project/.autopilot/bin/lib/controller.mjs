@@ -358,8 +358,12 @@ async function bestEffortAuxiliary(label, operation) {
 }
 
 function blockerFrom(error, kind = "runtime") {
+  const errorCode = typeof error?.code === "string" && /^[A-Z][A-Z0-9_]{0,127}$/.test(error.code)
+    ? error.code
+    : null;
   return {
     kind,
+    ...(errorCode ? { error_code: errorCode } : {}),
     message: error instanceof Error ? error.message : String(error),
     required_action: "Inspect the bounded checkpoint, correct the underlying issue, and do not paste secret values into chat or project files.",
     resume_condition: "The project validates cleanly and the explicit resume command is run.",

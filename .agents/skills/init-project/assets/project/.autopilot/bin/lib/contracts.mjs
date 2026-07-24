@@ -178,7 +178,7 @@ export function validateConfig(config) {
     issue(issues, "config.opencode.credential_profile", "is unsupported; use phase-specific opencode.credential_profiles");
   }
   if (config.opencode?.attach_url !== null && config.opencode?.attach_url !== undefined) {
-    issue(issues, "config.opencode.attach_url", "must be null; autonomous phases require an isolated OpenCode process");
+    issue(issues, "config.opencode.attach_url", "must be null; autonomous phases require a fresh OpenCode process");
   }
   if (config.opencode?.auto_approve !== true) {
     issue(issues, "config.opencode.auto_approve", "must be true so autonomous phases cannot pause inside an unobservable approval prompt");

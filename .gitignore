@@ -1,2 +1,3 @@
 .tmp-*-footprint/
 node_modules/
+evaluation/profile.local.json

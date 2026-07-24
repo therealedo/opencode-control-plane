@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "greenfield",
+  "title": "Greenfield policy ID normalizer",
+  "scenario": "greenfield",
+  "task_file": "task.md",
+  "seed_directory": "seed",
+  "solution_directory": "solution",
+  "allowed_changed_paths": ["src/normalize-policy-id.mjs"],
+  "simulation": {
+    "interrupt_after_phase": null,
+    "forced_gate_failures": 0
+  },
+  "verification": {
+    "gate": "evaluation/gates/verify-case.mjs"
+  }
+}

@@ -360,6 +360,7 @@ export function safeBaseEnv(source = process.env) {
   const allowed = new Set([
     "PATH", "Path", "PATHEXT", "SystemRoot", "SYSTEMROOT", "COMSPEC", "ComSpec",
     "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+    "PSModuleAnalysisCachePath",
     "LANG", "LC_ALL", "TERM", "CI", "NO_COLOR", "FORCE_COLOR",
   ]);
   return Object.fromEntries(

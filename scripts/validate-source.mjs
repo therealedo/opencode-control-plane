@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises"
+import { lstat, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises"
 import { spawnSync } from "node:child_process"
 import os from "node:os"
 import path from "node:path"
@@ -17,8 +17,13 @@ const errors = []
 const warnings = []
 const skillNames = new Set()
 const readmePath = path.join(root, "README.md")
+const securityPath = path.join(root, "docs", "security.md")
 const releasePath = path.join(skillRoot, "init-project", "assets", "control-plane-release.json")
 const packagePath = path.join(root, "package.json")
+const evaluationRoot = path.join(root, "evaluation")
+const evaluationProfilePath = path.join(evaluationRoot, "profile.example.json")
+const evaluationCorpusRoot = path.join(evaluationRoot, "corpus")
+const evaluationGatePath = path.join(evaluationRoot, "gates", "verify-case.mjs")
 
 for (const directory of await readdir(skillRoot, { withFileTypes: true })) {
   if (!directory.isDirectory()) continue
@@ -142,12 +147,16 @@ for (const required of [
 try {
   const release = await loadControlPlaneRelease(path.join(skillRoot, "init-project"))
   const packageMetadata = JSON.parse(await readFile(packagePath, "utf8"))
-  const exactIdentity = "a high-efficiency, zero-token orchestrator that turns OpenCode into a sandboxed, self-verifying coding worker. Keeping it lean, fast, and terminal-native is its superpower"
+  const exactDescription = "A high-efficiency, zero-token orchestrator that turns OpenCode into a policy-bounded, self-verifying coding worker."
+  const exactIdentity = "a high-efficiency, zero-token orchestrator that turns OpenCode into a policy-bounded, self-verifying coding worker. Keeping it lean, fast, and terminal-native is its superpower"
   if (release.name !== "OpenCode Control Plane" || release.identity !== exactIdentity) {
     errors.push("Control Plane release manifest must preserve the exact public name and identity")
   }
   if (packageMetadata.name !== "opencode-control-plane" || packageMetadata.version !== release.version) {
     errors.push("package.json name/version must match the Control Plane release")
+  }
+  if (packageMetadata.description !== exactDescription) {
+    errors.push("package.json description must preserve the truthful public boundary")
   }
   if (packageMetadata.repository?.url !== "git+https://github.com/therealedo/opencode-control-plane.git") {
     errors.push("package.json repository must point to the public Control Plane repository")
@@ -157,6 +166,8 @@ try {
 } catch (error) {
   errors.push(`Invalid Control Plane release ownership: ${error.message}`)
 }
+
+await validateEvaluationAssets()
 
 const agentsPath = path.join(assetRoot, "AGENTS.md")
 if (await exists(agentsPath)) {
@@ -169,6 +180,9 @@ if (await exists(agentsPath)) {
   }
   if (/task spec outranks[\s\S]{0,120}security/i.test(content)) {
     errors.push("Template AGENTS.md must not let task text override security boundaries")
+  }
+  if (!/not an OS sandbox/i.test(content) || !/external isolation/i.test(content)) {
+    errors.push("Template AGENTS.md must state the external operating-system isolation boundary")
   }
   for (const contractPath of [".autopilot/runtime/candidate.json", ".autopilot/runtime/review.json"]) {
     if (!content.includes(contractPath)) errors.push(`Template AGENTS.md must name ${contractPath}`)
@@ -452,7 +466,7 @@ if (!(await exists(readmePath))) {
   if (Buffer.byteLength(readme) > 12 * 1024) errors.push("README.md exceeds the 12 KiB beginner-guide cap")
   for (const required of [
     "# OpenCode Control Plane",
-    "a high-efficiency, zero-token orchestrator that turns OpenCode into a sandboxed, self-verifying coding worker. Keeping it lean, fast, and terminal-native is its superpower",
+    "a high-efficiency, zero-token orchestrator that turns OpenCode into a policy-bounded, self-verifying coding worker. Keeping it lean, fast, and terminal-native is its superpower",
     "https://github.com/therealedo/opencode-control-plane.git",
     "npm run setup",
     "npm run upgrade",
@@ -465,6 +479,15 @@ if (!(await exists(readmePath))) {
     "GitHub Release",
   ]) {
     if (!readme.includes(required)) errors.push(`README.md is missing beginner contract text: ${required}`)
+  }
+}
+
+if (!(await exists(securityPath))) {
+  errors.push("Missing docs/security.md")
+} else {
+  const security = await readFile(securityPath, "utf8")
+  for (const required of ["application-level policy boundary", "not an operating-system sandbox"]) {
+    if (!security.includes(required)) errors.push(`docs/security.md must state ${required}`)
   }
 }
 
@@ -514,6 +537,360 @@ const output = {
 }
 console.log(JSON.stringify(output, null, 2))
 if (errors.length > 0) process.exitCode = 1
+
+async function validateEvaluationAssets() {
+  const requiredCases = new Map([
+    ["greenfield", "greenfield"],
+    ["feature", "feature"],
+    ["bug-repair", "bug_repair"],
+    ["external-integration", "external_integration"],
+    ["blueprint-migration", "blueprint_migration"],
+    ["interruption-recovery", "interruption_recovery"],
+    ["failed-verification", "failed_verification"],
+  ])
+  const requiredStrategies = ["direct", "fresh_loop", "control_plane"]
+
+  if (!(await exists(evaluationProfilePath))) {
+    errors.push("Missing evaluation profile: evaluation/profile.example.json")
+  } else {
+    try {
+      const profile = await readBoundedJson(evaluationProfilePath, 64 * 1024, "Evaluation example profile")
+      expectExactKeys(profile, [
+        "schema_version",
+        "profile_id",
+        "model",
+        "variant",
+        "opencode_command",
+        "provider_auth_mode",
+        "provider_environment",
+        "strategies",
+        "cases",
+        "repetitions",
+        "attempt_limit",
+        "timeout_seconds",
+        "max_output_bytes",
+        "keep_test_projects",
+        "require_complete_usage",
+        "budgets",
+      ], "Evaluation example profile")
+      if (profile.schema_version !== 1) errors.push("Evaluation example profile must use schema_version 1")
+      if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(profile.profile_id ?? "")) {
+        errors.push("Evaluation example profile needs a safe profile_id")
+      }
+      if (profile.model !== "provider/model" || profile.variant !== null) {
+        errors.push("Evaluation example profile must keep model and variant as inert placeholders")
+      }
+      if (JSON.stringify(profile.opencode_command) !== JSON.stringify(["opencode"])) {
+        errors.push("Evaluation example profile must use only the placeholder OpenCode command")
+      }
+      if (profile.provider_auth_mode !== "auth_file" || JSON.stringify(profile.provider_environment) !== "[]") {
+        errors.push("Evaluation example profile must not embed provider credentials or environment names")
+      }
+      if (JSON.stringify(profile.strategies) !== JSON.stringify(requiredStrategies)) {
+        errors.push("Evaluation example profile must contain the three required strategies exactly once")
+      }
+      if (JSON.stringify(profile.cases) !== JSON.stringify([...requiredCases.keys()])) {
+        errors.push("Evaluation example profile must contain the seven required cases exactly once")
+      }
+      requireInteger(profile.repetitions, 1, 10, "Evaluation repetitions")
+      requireInteger(profile.attempt_limit, 1, 10, "Evaluation attempt_limit")
+      requireInteger(profile.timeout_seconds, 30, 7200, "Evaluation timeout_seconds")
+      requireInteger(profile.max_output_bytes, 64 * 1024, 64 * 1024 * 1024, "Evaluation max_output_bytes")
+      if (profile.keep_test_projects !== false) {
+        errors.push("Evaluation example profile must remove disposable test projects by default")
+      }
+      if (profile.require_complete_usage !== true) {
+        errors.push("Evaluation example profile must require complete provider usage telemetry")
+      }
+      expectExactKeys(profile.budgets, [
+        "max_trials",
+        "max_elapsed_minutes",
+        "max_provider_cost",
+        "max_input_tokens",
+        "max_output_tokens",
+        "max_reasoning_tokens",
+        "max_cache_read_tokens",
+        "max_cache_write_tokens",
+      ], "Evaluation budgets")
+      requireInteger(profile.budgets?.max_trials, 1, 1000, "Evaluation budget max_trials")
+      requireInteger(profile.budgets?.max_elapsed_minutes, 1, 1440, "Evaluation budget max_elapsed_minutes")
+      requireNumber(profile.budgets?.max_provider_cost, 0.01, 10000, "Evaluation budget max_provider_cost")
+      for (const name of [
+        "max_input_tokens",
+        "max_output_tokens",
+        "max_reasoning_tokens",
+        "max_cache_read_tokens",
+        "max_cache_write_tokens",
+      ]) {
+        requireInteger(profile.budgets?.[name], 1, 1_000_000_000, `Evaluation budget ${name}`)
+      }
+      const plannedTrials = requiredStrategies.length * requiredCases.size * (Number.isInteger(profile.repetitions) ? profile.repetitions : 0)
+      if (Number.isInteger(profile.budgets?.max_trials) && profile.budgets.max_trials < plannedTrials) {
+        errors.push(`Evaluation budget max_trials must cover the configured ${plannedTrials} trials`)
+      }
+      if (containsSecretLikeValue(profile)) {
+        errors.push("Evaluation example profile must not contain credentials, access tokens, private keys, or provider secrets")
+      }
+    } catch (error) {
+      errors.push(`Invalid evaluation example profile: ${error.message}`)
+    }
+  }
+
+  if (!(await exists(evaluationCorpusRoot))) {
+    errors.push("Missing evaluation corpus: evaluation/corpus")
+  } else {
+    let entries = []
+    try {
+      entries = await readdir(evaluationCorpusRoot, { withFileTypes: true })
+    } catch (error) {
+      errors.push(`Cannot read evaluation corpus: ${error.message}`)
+    }
+    const actualCaseIds = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort()
+    const expectedCaseIds = [...requiredCases.keys()].sort()
+    if (JSON.stringify(actualCaseIds) !== JSON.stringify(expectedCaseIds)) {
+      errors.push(`Evaluation corpus must contain exactly these seven case directories: ${expectedCaseIds.join(", ")}`)
+    }
+    for (const [caseId, scenario] of requiredCases) {
+      await validateEvaluationCase(caseId, scenario)
+    }
+  }
+
+  if (!(await exists(evaluationGatePath))) {
+    errors.push("Missing generic evaluation gate: evaluation/gates/verify-case.mjs")
+  } else {
+    checkModuleSyntax(evaluationGatePath, "Generic evaluation gate")
+  }
+
+  const scriptRoot = path.join(root, "scripts")
+  if (await exists(scriptRoot)) {
+    for (const file of await walkFiles(scriptRoot)) {
+      const name = relative(file)
+      if (path.extname(file) === ".mjs" && /(?:^|\/)(?:evaluate|evaluation)[^/]*\.mjs$/i.test(name)) {
+        checkModuleSyntax(file, "Evaluation script")
+      }
+    }
+  }
+}
+
+async function validateEvaluationCase(caseId, expectedScenario) {
+  const caseRoot = path.join(evaluationCorpusRoot, caseId)
+  const caseFile = path.join(caseRoot, "case.json")
+  if (!(await exists(caseFile))) {
+    errors.push(`Missing evaluation case contract: evaluation/corpus/${caseId}/case.json`)
+    return
+  }
+  let config
+  try {
+    config = await readBoundedJson(caseFile, 64 * 1024, `Evaluation case ${caseId}`)
+  } catch (error) {
+    errors.push(`Invalid evaluation case ${caseId}: ${error.message}`)
+    return
+  }
+  expectExactKeys(config, [
+    "schema_version",
+    "id",
+    "title",
+    "scenario",
+    "task_file",
+    "seed_directory",
+    "solution_directory",
+    "allowed_changed_paths",
+    "simulation",
+    "verification",
+  ], `Evaluation case ${caseId}`)
+  if (config.schema_version !== 1 || config.id !== caseId || config.scenario !== expectedScenario) {
+    errors.push(`Evaluation case ${caseId} must use schema_version 1 and its required ID/category`)
+  }
+  if (
+    typeof config.title !== "string" ||
+    config.title !== config.title.trim() ||
+    config.title.length < 1 ||
+    config.title.length > 160 ||
+    /[\x00-\x1f\x7f]/.test(config.title)
+  ) {
+    errors.push(`Evaluation case ${caseId} needs a bounded plain-text title`)
+  }
+  if (config.task_file !== "task.md" || config.seed_directory !== "seed" || config.solution_directory !== "solution") {
+    errors.push(`Evaluation case ${caseId} must use the contained task.md, seed, and solution paths`)
+  }
+  expectExactKeys(config.simulation, ["interrupt_after_phase", "forced_gate_failures"], `Evaluation case ${caseId} simulation`)
+  const expectedInterruption = caseId === "interruption-recovery" ? "execute" : null
+  const expectedFailures = caseId === "failed-verification" ? 1 : 0
+  if (
+    config.simulation?.interrupt_after_phase !== expectedInterruption ||
+    config.simulation?.forced_gate_failures !== expectedFailures
+  ) {
+    errors.push(`Evaluation case ${caseId} must preserve its deterministic interruption/failure simulation`)
+  }
+  expectExactKeys(config.verification, ["gate"], `Evaluation case ${caseId} verification`)
+  if (config.verification?.gate !== "evaluation/gates/verify-case.mjs") {
+    errors.push(`Evaluation case ${caseId} must use the one generic held-out gate`)
+  }
+
+  const patterns = Array.isArray(config.allowed_changed_paths) ? config.allowed_changed_paths : []
+  if (patterns.length === 0 || patterns.length > 64 || new Set(patterns).size !== patterns.length) {
+    errors.push(`Evaluation case ${caseId} needs 1-64 unique allowed_changed_paths`)
+  }
+  const matchers = []
+  for (const pattern of patterns) {
+    const matcher = evaluationPathMatcher(pattern)
+    if (!matcher) errors.push(`Evaluation case ${caseId} has an unsafe allowed path: ${String(pattern)}`)
+    else matchers.push({ pattern, matcher })
+  }
+
+  const taskPath = containedEvaluationPath(caseRoot, config.task_file)
+  if (!taskPath) {
+    errors.push(`Evaluation case ${caseId} task path escapes its case directory`)
+  } else {
+    try {
+      const info = await lstat(taskPath)
+      if (!info.isFile() || info.isSymbolicLink() || Number(info.nlink) !== 1 || info.size < 1 || info.size > 32 * 1024) {
+        throw new Error("task.md must be one non-empty bounded regular file")
+      }
+      if (!(await readFile(taskPath, "utf8")).trim()) throw new Error("task.md cannot be blank")
+    } catch (error) {
+      errors.push(`Invalid evaluation task for ${caseId}: ${error.message}`)
+    }
+  }
+
+  const seedPath = containedEvaluationPath(caseRoot, config.seed_directory)
+  const solutionPath = containedEvaluationPath(caseRoot, config.solution_directory)
+  const seedFiles = seedPath ? await inspectEvaluationTree(seedPath, `${caseId} seed`) : null
+  const solutionFiles = solutionPath ? await inspectEvaluationTree(solutionPath, `${caseId} solution`) : null
+  if (!seedPath) errors.push(`Evaluation case ${caseId} seed path escapes its case directory`)
+  if (!solutionPath) errors.push(`Evaluation case ${caseId} solution path escapes its case directory`)
+  if (seedFiles && seedFiles.length === 0) errors.push(`Evaluation case ${caseId} seed must contain at least one file`)
+  if (solutionFiles && solutionFiles.length === 0) errors.push(`Evaluation case ${caseId} solution must contain at least one file`)
+  if (solutionFiles && matchers.length) {
+    for (const file of solutionFiles) {
+      if (!matchers.some(({ matcher }) => matcher.test(file))) {
+        errors.push(`Evaluation case ${caseId} solution path is not allowed_changed_paths-covered: ${file}`)
+      }
+    }
+    for (const { pattern, matcher } of matchers) {
+      if (!solutionFiles.some((file) => matcher.test(file))) {
+        errors.push(`Evaluation case ${caseId} allowed path does not name a solution artifact: ${pattern}`)
+      }
+    }
+  }
+}
+
+async function readBoundedJson(file, maxBytes, label) {
+  const info = await lstat(file)
+  if (!info.isFile() || info.isSymbolicLink() || Number(info.nlink) !== 1 || info.size < 2 || info.size > maxBytes) {
+    throw new Error(`${label} must be one bounded regular JSON file`)
+  }
+  return JSON.parse(await readFile(file, "utf8"))
+}
+
+async function inspectEvaluationTree(directory, label) {
+  if (!directory) return null
+  try {
+    const rootInfo = await lstat(directory)
+    if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw new Error("must be one real directory")
+    const files = []
+    async function visit(current) {
+      for (const entry of await readdir(current, { withFileTypes: true })) {
+        const location = path.join(current, entry.name)
+        const info = await lstat(location)
+        if (info.isSymbolicLink()) throw new Error(`contains a symbolic link: ${relative(location)}`)
+        if (info.isDirectory()) await visit(location)
+        else if (info.isFile() && Number(info.nlink) === 1 && info.size <= 1024 * 1024) {
+          files.push(path.relative(directory, location).split(path.sep).join("/"))
+        } else throw new Error(`contains an unsafe or oversized file: ${relative(location)}`)
+        if (files.length > 256) throw new Error("exceeds the 256-file corpus limit")
+      }
+    }
+    await visit(directory)
+    return files.sort()
+  } catch (error) {
+    errors.push(`Invalid evaluation ${label}: ${error.message}`)
+    return null
+  }
+}
+
+function containedEvaluationPath(parent, value) {
+  if (
+    typeof value !== "string" ||
+    !value ||
+    value.includes("\\") ||
+    value.includes("\0") ||
+    path.isAbsolute(value) ||
+    path.win32.isAbsolute(value)
+  ) return null
+  const parts = value.split("/")
+  if (parts.some((part) => !part || part === "." || part === "..")) return null
+  const resolved = path.resolve(parent, ...parts)
+  const relativePath = path.relative(path.resolve(parent), resolved)
+  return relativePath && !relativePath.startsWith("..") && !path.isAbsolute(relativePath) ? resolved : null
+}
+
+function evaluationPathMatcher(value) {
+  if (
+    typeof value !== "string" ||
+    !value ||
+    value.length > 240 ||
+    value.includes("\\") ||
+    value.includes("\0") ||
+    path.isAbsolute(value) ||
+    path.win32.isAbsolute(value)
+  ) return null
+  const parts = value.split("/")
+  if (
+    parts.some((part) =>
+      !part ||
+      part === "." ||
+      part === ".." ||
+      (part !== "*" && part !== "**" && !/^[A-Za-z0-9._-]+$/.test(part)),
+    )
+  ) return null
+  const expression = parts.map((part) => {
+    if (part === "**") return ".*"
+    if (part === "*") return "[^/]+"
+    return part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  }).join("/")
+  return new RegExp(`^${expression}$`)
+}
+
+function expectExactKeys(value, expected, label) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    errors.push(`${label} must be an object`)
+    return
+  }
+  const actual = Object.keys(value).sort()
+  const wanted = [...expected].sort()
+  if (JSON.stringify(actual) !== JSON.stringify(wanted)) {
+    errors.push(`${label} fields must be exactly: ${wanted.join(", ")}`)
+  }
+}
+
+function requireInteger(value, minimum, maximum, label) {
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    errors.push(`${label} must be an integer from ${minimum} through ${maximum}`)
+  }
+}
+
+function requireNumber(value, minimum, maximum, label) {
+  if (!Number.isFinite(value) || value < minimum || value > maximum) {
+    errors.push(`${label} must be a number from ${minimum} through ${maximum}`)
+  }
+}
+
+function containsSecretLikeValue(value) {
+  if (Array.isArray(value)) return value.some(containsSecretLikeValue)
+  if (value && typeof value === "object") return Object.values(value).some(containsSecretLikeValue)
+  if (typeof value !== "string") return false
+  return (
+    /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/.test(value) ||
+    /\b(?:sk-(?:proj-)?|gh[pousr]_)[A-Za-z0-9_-]{16,}\b/.test(value) ||
+    /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/.test(value)
+  )
+}
+
+function checkModuleSyntax(file, label) {
+  const checked = spawnSync(process.execPath, ["--check", file], { encoding: "utf8", windowsHide: true, shell: false })
+  if (checked.status !== 0) errors.push(`${label} ${relative(file)} syntax error: ${checked.stderr.trim()}`)
+}
 
 function parseFrontmatter(content) {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)

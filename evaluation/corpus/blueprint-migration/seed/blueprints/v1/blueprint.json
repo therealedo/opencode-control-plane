@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "supported_languages": ["en"],
+  "architecture": {
+    "crm": "Twenty CRM",
+    "dialer": "Generic browser audio",
+    "authentication": "Existing authentication",
+    "database": "PostgreSQL"
+  }
+}

@@ -38,9 +38,9 @@ The system should retain three clearly separated layers:
 
 Blueprint and migration history belong to the cold planning path. They must not be repeatedly loaded into the autonomous execution path.
 
-## Current baseline: v1.4.5
+## Current baseline: v1.5.0
 
-Version 1.4.5 already provides:
+Version 1.5.0 provides:
 
 - modular, evolving blueprints;
 - deterministic scaffolding and upgrades;
@@ -56,22 +56,30 @@ Version 1.4.5 already provides:
 - a high-contrast, color-aware selector with visible horizontal and vertical navigation cues;
 - a dependency-free, live folder-suggestion picker for adding initialized projects without memorizing paths;
 - stricter skill wording that reserves human stops for genuinely human-resolvable boundaries.
+- a versioned, dependency-free evaluation corpus for seven representative development and recovery scenarios;
+- Direct OpenCode, minimal fresh-loop, and Control Plane trial modes that use only evaluator-owned disposable projects;
+- strict provider-event telemetry, per-dimension token/cost budgets, atomic resume state, and JSON plus Markdown results;
+- deterministic no-model simulation for release checks, while real model trials remain explicit opt-in work;
+- accurate public wording: local execution is policy-bounded and self-verifying, not an operating-system sandbox.
 
-The current measurement is a regression guard, not proof of end-to-end token savings or unchanged implementation quality. The next release must address that evidence gap before pursuing more prompt compression.
+The fixed-context measurement and simulated evaluation remain regression guards, not proof of end-to-end token savings or unchanged implementation quality. Controlled live trials across models are the next step before further prompt compression or reduced-review policy.
 
 ## Milestone 1: Evidence and truthful boundaries
 
 **Goal:** establish whether Control Plane improves total efficiency without reducing quality.
 
+**Status:** evaluation infrastructure shipped in v1.5.0; comparative live baselines are pending. Installation, upgrade, and normal project work never start paid evaluation trials.
+
 Planned outcomes:
 
-- Create a repeatable evaluation corpus covering greenfield work, feature changes, bug repair, integration changes, blueprint migration, interruption recovery, and failed verification.
-- Compare direct OpenCode, a minimal Ralph-style fresh-session loop, and Control Plane on equivalent tasks.
-- Measure total input, cache, reasoning, and output tokens per accepted task—not prompt bytes alone.
-- Record retries, repair frequency, elapsed time, unnecessary code or dependencies, false completion, gate results, and final acceptance quality.
-- Separate model/provider variability from framework-owned measurements.
-- Define an application-level **policy boundary** accurately in user-facing language; do not imply operating-system isolation.
-- Preserve the existing independent reviewer and safety gates while gathering the baseline.
+- Repeatable corpus for greenfield work, feature changes, bug repair, integration changes, blueprint migration, interruption recovery, and failed verification: **shipped**.
+- Direct OpenCode, minimal fresh-session loop, and Control Plane trial modes on equivalent disposable tasks: **shipped**.
+- Strict input, cache-read, cache-write, reasoning, output, and provider-cost collection—not prompt bytes alone: **shipped; live data pending**.
+- Retries, repairs, elapsed time, unnecessary files/dependencies, false completion, gate results, and final common acceptance: **shipped; live data pending**.
+- Model/provider/profile identity separated from framework-owned measurements: **shipped**.
+- Accurate application-level **policy boundary** language without implying operating-system isolation: **shipped**.
+- Existing independent reviewer and deterministic safety gates retained while gathering the baseline: **shipped**.
+- Repeated live baselines for supported model/profile combinations, including failures and incomplete telemetry: **pending**.
 
 Exit criteria:
 
@@ -88,7 +96,7 @@ Exit criteria:
 
 - initialization now stops at an explicit ready checkpoint before the first worker;
 - the terminal dashboard changes provider reasoning variants without a model call or blueprint revision;
-- the selected variant is injected into every fresh isolated worker phase;
+- the selected variant is injected into every fresh policy-bounded worker phase;
 - an interview started on v1.2 upgrades its finalized scaffold automatically and preserves all answers before pausing;
 - the runtime setting is project-local, ignored by Git, disabled while a worker is live, and reversible to the provider default.
 
@@ -178,7 +186,7 @@ The following work is not committed. It should begin only when measurements demo
 
 ### Official OpenCode SDK integration
 
-Keep the current fresh-process execution while it remains simple and reliable. Consider the official SDK or server event stream only if it materially improves structured output, cancellation, compatibility, or live status without weakening phase isolation or requiring a persistent daemon.
+Keep the current fresh-process execution while it remains simple and reliable. Consider the official SDK or server event stream only if it materially improves structured output, cancellation, compatibility, or live status without weakening phase separation or requiring a persistent daemon.
 
 ### Parallel tasks and worktrees
 

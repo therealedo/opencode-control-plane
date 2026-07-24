@@ -1,0 +1,19 @@
+{
+  "from_version": 1,
+  "to_version": 2,
+  "classification": "architecture",
+  "compatibility": "breaking",
+  "risk": "medium",
+  "affected": ["CRM adapter", "Dialer adapter", "Locale catalogs", "Environment variables", "Integration tests"],
+  "unaffected": ["Authentication", "Database"],
+  "operations": {
+    "remove": ["TwentyCRMProvider", "BrowserAudioDialer"],
+    "create": ["ZohoCRMProvider", "KixieDialer", "SpanishLocaleCatalog"]
+  },
+  "environment": {
+    "remove": ["TWENTY_CRM_API_URL", "TWENTY_CRM_TOKEN"],
+    "add": ["ZOHO_CRM_CLIENT_ID", "ZOHO_CRM_CLIENT_SECRET", "ZOHO_CRM_REFRESH_TOKEN", "KIXIE_API_KEY", "KIXIE_BUSINESS_ID"]
+  },
+  "tests": ["CRM adapter tests", "Dialer adapter tests", "English and Spanish locale tests", "Final integration gate"],
+  "rollback": "Reactivate Blueprint v1 and restore the Twenty CRM and browser-audio adapter registry from the preserved baseline."
+}

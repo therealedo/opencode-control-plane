@@ -297,7 +297,7 @@ async function validatePhaseIsolation(project, queue, credentials, issues) {
       }
     }
   } catch (error) {
-    issues.push({ severity: "error", location: "phase isolation", message: error.message });
+    issues.push({ severity: "error", location: "phase policy boundary", message: error.message });
   }
 }
 
@@ -733,7 +733,7 @@ export async function validateProject(root, {
     issues.push({ severity: "error", location: "queue.project_status", message: "must leave initializing before autonomous execution" });
   }
   if (strict && !project.config.git.local_commits) {
-    issues.push({ severity: "error", location: "config.git.local_commits", message: "must be true so every accepted task and controller checkpoint has an isolated recoverable baseline" });
+    issues.push({ severity: "error", location: "config.git.local_commits", message: "must be true so every accepted task and controller checkpoint has an independent recoverable baseline" });
   }
   if (strict && (!Array.isArray(gates.final_gates) || gates.final_gates.length === 0)) {
     issues.push({ severity: "error", location: "gates.final_gates", message: "strict execution requires at least one deterministic project-completion gate" });

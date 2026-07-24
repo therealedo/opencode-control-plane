@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "feature",
+  "title": "Active-policy premium summary",
+  "scenario": "feature",
+  "task_file": "task.md",
+  "seed_directory": "seed",
+  "solution_directory": "solution",
+  "allowed_changed_paths": ["src/policies.mjs"],
+  "simulation": {
+    "interrupt_after_phase": null,
+    "forced_gate_failures": 0
+  },
+  "verification": {
+    "gate": "evaluation/gates/verify-case.mjs"
+  }
+}

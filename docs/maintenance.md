@@ -4,18 +4,21 @@
 
 `npm run validate` checks skill frontmatter, release identity, required assets, JSON, role permissions, tool grants, JavaScript syntax, the beginner README contract, a fresh scaffold, and project validation.
 
-`npm test` runs scaffold, renderer, evolution, isolation, process, controller recovery, dashboard, installer, and upgrade tests. `npm run check` runs validation and tests together.
+`npm test` runs scaffold, renderer, evolution, policy-boundary, process, controller recovery, evaluator, dashboard, installer, and upgrade tests. `npm run check` runs validation and tests together.
 
 ## Release procedure
 
 1. Make the framework change and focused tests.
 2. Keep model-facing skills and `AGENTS.md` concise; move deterministic behavior into scripts.
-3. Bump the same semantic version in `package.json` and `.agents/skills/init-project/assets/control-plane-release.json`.
-4. Run `npm run check`.
-5. Run `npm run upgrade -- --local --all-projects` against a staging home and disposable initialized projects.
-6. Commit, create the matching `vMAJOR.MINOR.PATCH` tag, and publish a stable GitHub Release at `https://github.com/therealedo/opencode-control-plane.git`.
+3. Run `node scripts/evaluate.mjs --simulate` so the full corpus, budget, resume, and reporting path is exercised without a model.
+4. Bump the same semantic version in `package.json` and `.agents/skills/init-project/assets/control-plane-release.json`.
+5. Run `npm run check`.
+6. Run `npm run upgrade -- --local --all-projects` against a staging home and disposable initialized projects.
+7. Commit, create the matching `vMAJOR.MINOR.PATCH` tag, and publish a stable GitHub Release at `https://github.com/therealedo/opencode-control-plane.git`.
 
 For changes to prompts, generated project references, packet assembly, or tool schemas, also update the fixed footprint fixture and token-efficiency test. Compare like-for-like phases and report framework-owned bytes separately from provider-reported tokens, reasoning, cache reads, cost, and acceptance quality. Never advertise a byte reduction as a guaranteed billing reduction.
+
+Live evaluation is optional release evidence, never a release-script side effect. Use a copied local profile, one fixed model/variant and OpenCode version, explicit spend confirmation, and an evaluator-owned temporary run. Publish the complete failure-visible report and configuration hash; do not rank incomplete telemetry or combine different model/provider profiles.
 
 ## Global upgrade
 

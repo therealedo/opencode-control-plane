@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "interruption-recovery",
+  "title": "Idempotent call-event recovery",
+  "scenario": "interruption_recovery",
+  "task_file": "task.md",
+  "seed_directory": "seed",
+  "solution_directory": "solution",
+  "allowed_changed_paths": ["src/call-log.mjs"],
+  "simulation": {
+    "interrupt_after_phase": "execute",
+    "forced_gate_failures": 0
+  },
+  "verification": {
+    "gate": "evaluation/gates/verify-case.mjs"
+  }
+}

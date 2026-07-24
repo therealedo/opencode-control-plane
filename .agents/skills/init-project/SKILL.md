@@ -1,6 +1,6 @@
 ---
 name: init-project
-description: Initialize a new project with OpenCode Control Plane, including its modular blueprint, sandboxed autonomous worker loop, terminal dashboard, testing boundaries, and versioned upgrade ownership.
+description: Initialize a new project with OpenCode Control Plane, including its modular blueprint, policy-bounded autonomous worker loop, terminal dashboard, testing boundaries, and versioned upgrade ownership.
 ---
 
 # Initialize OpenCode Control Plane
@@ -47,6 +47,6 @@ node <skill-directory>/bin/finalize-and-launch.mjs --target <project-root> --jso
 
 It deterministically renders Blueprint v1 and project memory, records ownership/version, validates packets, commits the baseline, removes drafts, registers the project, upgrades an older interview scaffold when needed, and preflights without starting a worker. Configure missing Git identity and rerun. On success tell the user to open `control-plane`, choose **Worker reasoning** if desired, and select **Start worker**. This deliberate zero-token checkpoint lets runtime reasoning change without changing the blueprint or losing interview answers. If `ready: false`, report only named provisioning failures; leave it idle for dashboard readiness/start. Registration failure is nonfatal and can be fixed from the dashboard.
 
-Only pass `--variant <id> --start` when the user explicitly selected that provider variant and explicitly asked for immediate launch. A `/variants` choice in the interview session is not inherited by isolated workers unless it is saved through this argument or the dashboard.
+Only pass `--variant <id> --start` when the user explicitly selected that provider variant and explicitly asked for immediate launch. A `/variants` choice in the interview session is not inherited by fresh workers unless it is saved through this argument or the dashboard.
 
 Use other zero-model scripts only for diagnosis.
