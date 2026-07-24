@@ -24,7 +24,13 @@ import {
   compareVersions,
   RELEASE_REPOSITORY,
 } from "./lib/release-channel.mjs";
-import { projectSummary, renderFleet } from "./lib/global-control-plane-ui.mjs";
+import {
+  fleetActionMenu,
+  nextFleetAction,
+  projectSummary,
+  renderFleet,
+} from "./lib/global-control-plane-ui.mjs";
+import { pickProjectDirectory } from "./lib/directory-picker.mjs";
 
 const POLL_MS = 2_000;
 const UPDATE_POLL_MS = 6 * 60 * 60_000;
@@ -63,14 +69,19 @@ async function interactive(home, initialInstallation) {
     projects: [],
     update: null,
     selected: 0,
+    selectedAction: 0,
     message: "Loading registered projects...",
     busy: false,
     confirm: null,
     stopped: false,
+    overlay: false,
   };
   let timer = null;
   let updateTimer = null;
   let raw = false;
+  let overlayAbort = null;
+  let refreshInFlight = null;
+  let updateSerial = 0;
 
   const enterScreen = () => {
     if (raw) return;
@@ -83,36 +94,68 @@ async function interactive(home, initialInstallation) {
   const leaveScreen = () => {
     if (!raw) return;
     process.stdin.setRawMode(false);
+    process.stdin.pause();
     process.stdout.write("\x1b[?25h\x1b[?1049l");
     raw = false;
   };
   const draw = () => {
-    if (!raw) return;
+    if (!raw || model.overlay) return;
     const screen = renderFleet({
       projects: model.projects,
       installedVersion: model.installation.version,
       update: model.update,
       selected: model.selected,
+      selectedAction: model.selectedAction,
       message: model.confirm?.text ?? model.message,
       busy: model.busy,
       width: process.stdout.columns ?? 100,
-      height: process.stdout.rows ?? 30,
+      height: Math.max(1, (process.stdout.rows ?? 30) - (model.confirm ? 1 : 0)),
     });
     process.stdout.write(`\x1b[H\x1b[2J${screen}${model.confirm ? "\nPress Y to continue or N to cancel." : ""}`);
   };
-  const refresh = async () => {
-    model.installation = await readInstallation(home);
-    model.projects = await inspectFleet(home, model.installation.version);
-    if (model.selected >= model.projects.length) model.selected = Math.max(0, model.projects.length - 1);
-    if (model.message === "Loading registered projects...") model.message = "Ready.";
-    draw();
+  const refresh = ({ fresh = false } = {}) => {
+    if (refreshInFlight) {
+      return fresh ? refreshInFlight.then(() => refresh()) : refreshInFlight;
+    }
+    const operation = (async () => {
+      try {
+        const installation = await readInstallation(home);
+        const projects = await inspectFleet(home, installation.version);
+        if (model.stopped) return;
+        model.installation = installation;
+        model.projects = projects;
+        if (model.selected >= model.projects.length) model.selected = Math.max(0, model.projects.length - 1);
+        const actions = fleetActionMenu(model.projects[model.selected] ?? null);
+        if (!actions[model.selectedAction]?.enabled) model.selectedAction = nextFleetAction(actions, model.selectedAction, 1);
+        if (model.message === "Loading registered projects...") model.message = "Ready.";
+        draw();
+      } catch (error) {
+        if (model.stopped) return;
+        model.message = `Could not refresh projects: ${safeText(error.message, 700)}`;
+        draw();
+      }
+    })();
+    const tracked = operation.finally(() => {
+      if (refreshInFlight === tracked) refreshInFlight = null;
+    });
+    refreshInFlight = tracked;
+    return tracked;
   };
   const refreshUpdate = async (force = false) => {
-    model.update = await checkForUpdate({ installedVersion: model.installation.version, home, force });
-    if (model.update.update_available) model.message = `Control Plane v${model.update.latest_version} is available. Press U to update everything safely.`;
-    else if (model.update.error) model.message = `Update check unavailable: ${safeText(model.update.error, 500)}. Project control remains available.`;
-    else model.message = `Control Plane v${model.installation.version} is current.`;
-    draw();
+    const serial = ++updateSerial;
+    try {
+      const update = await checkForUpdate({ installedVersion: model.installation.version, home, force });
+      if (model.stopped || serial !== updateSerial) return;
+      model.update = update;
+      if (model.update.update_available) model.message = `Control Plane v${model.update.latest_version} is available. Press U to update everything safely.`;
+      else if (model.update.error) model.message = `Update check unavailable: ${safeText(model.update.error, 500)}. Project control remains available.`;
+      else model.message = `Control Plane v${model.installation.version} is current.`;
+      draw();
+    } catch (error) {
+      if (model.stopped || serial !== updateSerial) return;
+      model.message = `Update check unavailable: ${safeText(error.message, 500)}. Project control remains available.`;
+      draw();
+    }
   };
   const cleanup = () => {
     if (model.stopped) return;
@@ -123,20 +166,50 @@ async function interactive(home, initialInstallation) {
     process.off("SIGINT", quit);
     process.off("SIGTERM", quit);
     process.stdout.off("resize", draw);
+    overlayAbort?.abort();
+    overlayAbort = null;
+    model.overlay = false;
     leaveScreen();
   };
   const quit = () => { cleanup(); process.exitCode = 0; };
   const selectedProject = () => model.projects[model.selected] ?? null;
 
   const addProject = async () => {
-    leaveScreen();
-    const answer = await ask("Project folder: ");
-    enterScreen();
-    if (!answer.trim()) { model.message = "Add cancelled."; return draw(); }
+    model.busy = true;
+    model.overlay = true;
+    process.stdin.off("keypress", onKey);
+    const abort = new AbortController();
+    overlayAbort = abort;
+    let result = null;
+    let pickerError = null;
     try {
-      const result = await registerProject(answer.trim(), { home });
+      const selected = selectedProject();
+      result = await pickProjectDirectory({
+        startDirectory: selected?.root ? path.dirname(selected.root) : process.cwd(),
+        home: os.homedir(),
+        signal: abort.signal,
+        submit: (candidate) => registerProject(candidate, { home }),
+      });
+    } catch (error) {
+      pickerError = error;
+    } finally {
+      if (overlayAbort === abort) overlayAbort = null;
+      if (!model.stopped) process.stdin.on("keypress", onKey);
+      model.overlay = false;
+      model.busy = false;
+    }
+    if (model.stopped) return;
+    if (pickerError) {
+      model.message = `Could not open folder picker: ${safeText(pickerError.message, 700)}`;
+      return draw();
+    }
+    if (!result) {
+      model.message = "Add cancelled.";
+      return draw();
+    }
+    try {
       model.message = result.added ? `Added ${result.project.name}.` : `${result.project.name} was already registered.`;
-      await refresh();
+      await refresh({ fresh: true });
     } catch (error) {
       model.message = `Could not add project: ${safeText(error.message, 700)}`;
       draw();
@@ -167,7 +240,7 @@ async function interactive(home, initialInstallation) {
       model.message = `Could not open project: ${safeText(error.message, 700)}`;
     } finally {
       model.busy = false;
-      await refresh();
+      await refresh({ fresh: true });
     }
   };
   const performUpdate = async () => {
@@ -183,7 +256,7 @@ async function interactive(home, initialInstallation) {
         ? `Update finished with ${failed} project(s) needing attention. Open them from this list, then press U again.`
         : `Update complete. Global Control Plane and ${results.length} registered project(s) are current.`;
       model.update = null;
-      await refresh();
+      await refresh({ fresh: true });
       await refreshUpdate(true);
     } catch (error) {
       model.message = `Update stopped safely: ${safeText(error.message, 900)}`;
@@ -193,16 +266,43 @@ async function interactive(home, initialInstallation) {
     }
   };
 
+  const performFleetAction = (action) => {
+    if (!action?.enabled || model.busy) return;
+    if (action.id === "open") void openProject();
+    else if (action.id === "add") void addProject();
+    else if (action.id === "forget" && selectedProject()) {
+      const project = selectedProject();
+      model.confirm = {
+        action: "forget",
+        project_id: project.id,
+        project_name: project.name,
+        text: `Forget ${project.name}? The project itself will not be deleted.`,
+      };
+    } else if (action.id === "update") {
+      model.confirm = { action: "update", text: "Update the global Control Plane, drain running projects safely, update them, and resume only workers that were running?" };
+    } else if (action.id === "check") {
+      model.message = "Checking GitHub releases...";
+      draw();
+      void refreshUpdate(true);
+    } else if (action.id === "refresh") void refresh({ fresh: true });
+    else if (action.id === "quit") quit();
+    draw();
+  };
+
   const onKey = (_text, key = {}) => {
     if (key.ctrl && key.name === "c") return quit();
     if (model.confirm) {
       if (key.name === "y") {
-        const action = model.confirm.action;
+        const confirmation = model.confirm;
         model.confirm = null;
-        if (action === "forget") {
-          const project = selectedProject();
-          if (project) void forgetProject(project.id, { home }).then(refresh).catch((error) => { model.message = safeText(error.message); draw(); });
-        } else if (action === "update") void performUpdate();
+        if (confirmation.action === "forget") {
+          void forgetProject(confirmation.project_id, { home })
+            .then(() => {
+              model.message = `Forgot ${confirmation.project_name}. The project was not deleted.`;
+              return refresh({ fresh: true });
+            })
+            .catch((error) => { model.message = safeText(error.message); draw(); });
+        } else if (confirmation.action === "update") void performUpdate();
       } else if (["n", "escape"].includes(key.name)) {
         model.confirm = null;
         model.message = "Cancelled.";
@@ -211,15 +311,27 @@ async function interactive(home, initialInstallation) {
       return;
     }
     if (model.busy) return;
-    if (key.name === "up" && model.projects.length) model.selected = (model.selected + model.projects.length - 1) % model.projects.length;
-    else if (key.name === "down" && model.projects.length) model.selected = (model.selected + 1) % model.projects.length;
-    else if (key.name === "return") void openProject();
-    else if (key.name === "a") void addProject();
-    else if (key.name === "f" && selectedProject()) model.confirm = { action: "forget", text: `Forget ${selectedProject().name}? The project itself will not be deleted.` };
-    else if (key.name === "u") model.confirm = { action: "update", text: "Update the global Control Plane, drain running projects safely, update them, and resume only workers that were running?" };
-    else if (key.name === "c") { model.message = "Checking GitHub releases..."; draw(); void refreshUpdate(true); }
-    else if (key.name === "r") void refresh();
-    else if (key.name === "q") quit();
+    let actions = fleetActionMenu(selectedProject());
+    if (key.name === "left") model.selectedAction = nextFleetAction(actions, model.selectedAction, -1);
+    else if (key.name === "right" || key.name === "tab") model.selectedAction = nextFleetAction(actions, model.selectedAction, 1);
+    else if (key.name === "up" && model.projects.length) {
+      model.selected = (model.selected + model.projects.length - 1) % model.projects.length;
+      actions = fleetActionMenu(selectedProject());
+      if (!actions[model.selectedAction]?.enabled) model.selectedAction = nextFleetAction(actions, model.selectedAction, 1);
+    } else if (key.name === "down" && model.projects.length) {
+      model.selected = (model.selected + 1) % model.projects.length;
+      actions = fleetActionMenu(selectedProject());
+      if (!actions[model.selectedAction]?.enabled) model.selectedAction = nextFleetAction(actions, model.selectedAction, 1);
+    }
+    else if (key.name === "return") performFleetAction(actions[model.selectedAction]);
+    else {
+      const shortcut = String(key.name ?? "").toLowerCase();
+      const action = actions.find((item) => item.enabled && item.shortcut.toLowerCase() === shortcut);
+      if (action) {
+        model.selectedAction = actions.indexOf(action);
+        performFleetAction(action);
+      }
+    }
     draw();
   };
 
@@ -508,11 +620,6 @@ function parseArgs(argv) {
     } else throw new Error(`Unknown argument: ${value}`);
   }
   return result;
-}
-
-function ask(prompt) {
-  const interface_ = readline.createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((resolve) => interface_.question(prompt, (answer) => { interface_.close(); resolve(answer); }));
 }
 
 function pathKey(value) {

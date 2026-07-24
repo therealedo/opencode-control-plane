@@ -7,7 +7,7 @@ description: Diagnose and repair a reproducible runtime, test, build, or logic f
 
 1. Accept the controller-supplied task ID, attempt, failure fingerprint, and bounded evidence. Resolve the spec and context through `.project/plan/queue.json` and `.project/manifest.json`.
 2. Reproduce once when safe, distinguish root cause from symptoms, and make at most one minimal fix inside `allowed_paths`; use `autopilot_mutate` for deletes, moves, or executable-bit changes.
-3. Add or refine a regression test. When exposed, use only `autopilot_check`'s listed credential-free gates and at most twice; the controller reruns every fixed gate. Never invoke a shell. Stop when evidence is insufficient, the fingerprint persists, or a boundary must change.
+3. Add or refine a regression test. When exposed, use only `autopilot_check`'s listed credential-free gates and at most twice; the controller reruns every fixed gate. Never invoke a shell. Do not keep iterating inside this phase when evidence is insufficient, the fingerprint persists, or a boundary must change; write the required failed candidate, or use blocked only for a genuine human boundary, and let the controller select retry or recovery.
 4. Make `changed_files` exactly match the actual Git task diff. List environment-variable names only.
 5. Write exactly one `.autopilot/runtime/candidate.json` object:
    `{schema_version:1,task_id,attempt,status:"complete|blocked|failed",summary,changed_files:[],environment_variables:[],blocker:null|{kind,message,required_action,resume_condition}}`

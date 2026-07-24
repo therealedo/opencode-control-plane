@@ -48,9 +48,9 @@ control-plane
 
 The first screen shows all registered projects, which workers are running, progress, blueprint versions, problems, and available framework updates.
 
-- Arrow keys select a project.
-- Enter opens that project's full controls.
-- A adds an older initialized project to the list.
+- Up/Down selects a project; Left/Right selects a visible action; Enter runs it. Letter shortcuts still work.
+- O or **Open project** opens that project's full controls. It is highlighted by default when a project is available, so Enter opens it immediately.
+- A or **Add project** opens an in-terminal folder picker. Type to see matching next folders, use Up/Down to choose, Right/Tab to browse into the selected folder, Left to go back, and Enter to validate and add the highlighted folder.
 - F forgets a missing or unwanted entry; it never deletes the project.
 - C checks GitHub for a new release.
 - U updates the Control Plane and registered projects safely.
@@ -95,7 +95,7 @@ Version 1.0 does not yet have the global dashboard. From your Control Plane repo
 npm run upgrade -- --local
 ```
 
-Then reopen the terminal, run `control-plane`, press A, and select each existing initialized project folder. Press U to update the registered projects. A pre-versioned legacy project is never adopted automatically; use its separately reviewed adoption command when the dashboard tells you it is required.
+Then reopen the terminal, run `control-plane`, choose **Add project**, and select each existing initialized project folder. Choose **Update everything** to update the registered projects. A pre-versioned legacy project is never adopted automatically; use its separately reviewed adoption command when the dashboard tells you it is required.
 
 ## Secrets and test accounts
 

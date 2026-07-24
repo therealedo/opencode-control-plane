@@ -30,7 +30,7 @@ test("one-command upgrade validates source and previews the owned global update"
   assert.equal(output.validation.ok, true);
   assert.equal(output.global_install.upgrade, true);
   assert.equal(output.global_install.dry_run, true);
-  assert.equal(output.global_install.control_plane_version, "1.3.0");
+  assert.equal(output.global_install.control_plane_version, "1.4.0");
 });
 
 test("one-command dry-run previews every registered initialized project", async (t) => {

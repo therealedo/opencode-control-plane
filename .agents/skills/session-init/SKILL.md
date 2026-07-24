@@ -11,4 +11,4 @@ description: Recover and resume the autonomous controller after a new session, c
 4. Perform only the controller-requested recovery action. Every recovery runs in a fresh session; never reuse or continue a prior session.
 5. Return without work when a `STOP` or `PAUSED` marker exists or runtime status is `idle`, `paused`, `human_required`, `failed`, or `complete`.
 
-If required state files are missing or invalid, stop safely and request project initialization or recovery; never guess controller state.
+If required state files are missing or invalid, return a bounded recovery failure to the controller and never guess state. Require human action only when durable state cannot be restored deterministically.

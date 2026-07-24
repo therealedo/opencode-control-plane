@@ -131,6 +131,7 @@ for (const required of [
   path.join(skillRoot, "init-project", "bin", "lib", "project-registry.mjs"),
   path.join(skillRoot, "init-project", "bin", "lib", "release-channel.mjs"),
   path.join(skillRoot, "init-project", "bin", "lib", "global-control-plane-ui.mjs"),
+  path.join(skillRoot, "init-project", "bin", "lib", "directory-picker.mjs"),
   path.join(skillRoot, "init-project", "bin", "upgrade-project.mjs"),
   path.join(skillRoot, "init-project", "bin", "lib", "control-plane-files.mjs"),
   path.join(root, "scripts", "upgrade.mjs"),

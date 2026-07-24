@@ -4,11 +4,38 @@ import {
   safeText,
 } from "../../assets/project/.autopilot/bin/lib/control-plane-ui.mjs";
 
+export const FLEET_ACTIONS = Object.freeze([
+  { id: "open", label: "Open project", shortcut: "O" },
+  { id: "add", label: "Add project", shortcut: "A" },
+  { id: "forget", label: "Forget project", shortcut: "F" },
+  { id: "update", label: "Update everything", shortcut: "U" },
+  { id: "check", label: "Check updates", shortcut: "C" },
+  { id: "refresh", label: "Refresh", shortcut: "R" },
+  { id: "quit", label: "Close dashboard", shortcut: "Q" },
+]);
+
+export function fleetActionMenu(project = null) {
+  return FLEET_ACTIONS.map((action) => ({
+    ...action,
+    enabled: action.id === "open" ? Boolean(project?.available) : action.id === "forget" ? Boolean(project) : true,
+  }));
+}
+
+export function nextFleetAction(actions, selected, direction) {
+  if (!Array.isArray(actions) || actions.length === 0) return 0;
+  for (let offset = 1; offset <= actions.length; offset += 1) {
+    const index = (selected + direction * offset + actions.length * 2) % actions.length;
+    if (actions[index]?.enabled) return index;
+  }
+  return Math.max(0, Math.min(selected, actions.length - 1));
+}
+
 export function renderFleet({
   projects = [],
   installedVersion = "unknown",
   update = null,
   selected = 0,
+  selectedAction = 0,
   message = "",
   busy = false,
   width = 100,
@@ -19,6 +46,10 @@ export function renderFleet({
   const behind = projects.filter((item) => item.update_needed).length;
   const running = projects.filter((item) => item.mode?.id === "running").length;
   const attention = projects.filter((item) => !item.available || ["failed", "human_required", "interrupted"].includes(item.mode?.id)).length;
+  const actions = fleetActionMenu(projects[selected] ?? null);
+  const actionLines = busy ? [] : renderActionStrip(actions, selectedAction, usable);
+  const reservedRows = 14 + actionLines.length + (message ? 2 : 0);
+  const visibleProjectRows = Math.max(0, Math.floor(Number(height) || 30) - reservedRows);
   const output = [
     "OpenCode Control Plane",
     fit("All projects. Zero-token monitoring and control.", usable),
@@ -34,7 +65,7 @@ export function renderFleet({
   } else {
     output.push(fit(`${" ".padEnd(2)}${"Project".padEnd(28)} ${"State".padEnd(18)} ${"Progress".padEnd(12)} ${"Blueprint".padEnd(10)} Version`, usable));
     output.push(fit(`${" ".padEnd(2)}${"-".repeat(27)}  ${"-".repeat(17)}  ${"-".repeat(11)}  ${"-".repeat(9)}  ${"-".repeat(10)}`, usable));
-    const rows = Math.max(3, Math.min(projects.length, Number(height || 30) - 16));
+    const rows = Math.min(projects.length, visibleProjectRows);
     const start = Math.max(0, Math.min(selected - Math.floor(rows / 2), Math.max(0, projects.length - rows)));
     for (let index = start; index < Math.min(projects.length, start + rows); index += 1) {
       const item = projects[index];
@@ -49,11 +80,27 @@ export function renderFleet({
   }
   output.push(
     line,
-    busy ? "Working..." : "Enter: open project   A: add   F: forget   U: update everything   C: check updates   R: refresh   Q: close",
+    busy ? "Working..." : "Actions (Left/Right + Enter, or shortcut key):",
   );
+  if (!busy) output.push(...actionLines);
   if (message) output.push(line, fit(safeText(message, 1200), usable));
   output.push(line, "Closing this dashboard does not stop any worker.");
   return output.join("\n");
+}
+
+function renderActionStrip(actions, selected, width) {
+  const lines = [];
+  let current = "";
+  for (const [index, action] of actions.entries()) {
+    const label = `${action.shortcut}: ${action.label}`;
+    const token = index === selected ? `[${label}]` : action.enabled ? label : `(${label})`;
+    if (current && current.length + token.length + 3 > width) {
+      lines.push(current);
+      current = token;
+    } else current += `${current ? "   " : ""}${token}`;
+  }
+  if (current) lines.push(current);
+  return lines.map((line) => fit(line, width));
 }
 
 export function projectSummary(entry, data = {}) {

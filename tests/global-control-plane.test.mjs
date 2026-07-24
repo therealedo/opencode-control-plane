@@ -4,9 +4,53 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { registerProject } from "../.agents/skills/init-project/bin/lib/project-registry.mjs";
+import {
+  fleetActionMenu,
+  nextFleetAction,
+  renderFleet,
+} from "../.agents/skills/init-project/bin/lib/global-control-plane-ui.mjs";
 import { createScaffold, repositoryRoot, run } from "./runtime-helpers.mjs";
 
 const globalDashboard = path.join(repositoryRoot, ".agents", "skills", "init-project", "bin", "control-plane-global.mjs");
+
+test("fleet actions are arrow-selectable while preserving shortcut keys", () => {
+  const project = { available: true, name: "Producer Scribe", mode: { id: "idle", label: "Ready" }, status: {} };
+  const actions = fleetActionMenu(project);
+  assert.deepEqual(actions.map((item) => item.id), ["open", "add", "forget", "update", "check", "refresh", "quit"]);
+  assert.equal(actions[0].shortcut, "O");
+  assert.equal(nextFleetAction(actions, 0, 1), 1);
+  assert.equal(nextFleetAction(actions, 0, -1), 6);
+  const withoutProject = fleetActionMenu(null);
+  assert.equal(withoutProject[0].enabled, false);
+  assert.equal(withoutProject[2].enabled, false);
+  assert.equal(nextFleetAction(withoutProject, 0, 1), 1);
+
+  const rendered = renderFleet({ projects: [project], selected: 0, selectedAction: 1, update: { installed_version: "1.4.0" } });
+  assert.match(rendered, /Actions \(Left\/Right \+ Enter/);
+  assert.match(rendered, /\[A: Add project\]/);
+});
+
+test("fleet rendering stays inside the requested terminal height", () => {
+  const projects = Array.from({ length: 30 }, (_item, index) => ({
+    available: true,
+    name: `Project ${index + 1}`,
+    mode: { id: index === 0 ? "running" : "idle", label: index === 0 ? "Running" : "Ready" },
+    status: {},
+    blueprint_version: 1,
+    control_plane_version: "1.4.0",
+  }));
+  const height = 24;
+  const rendered = renderFleet({
+    projects,
+    selected: 15,
+    selectedAction: 0,
+    update: { installed_version: "1.4.0" },
+    message: "Ready.",
+    width: 64,
+    height,
+  });
+  assert.ok(rendered.split("\n").length <= height);
+});
 
 test("global snapshot works outside projects and never executes registered project code", async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), "ocp-global-home-"));

@@ -7,7 +7,7 @@ This reference explains the machinery behind the beginner workflow. It is not lo
 - `.project/` is the bounded, modular product model: brief, invariants, architecture, tooling, quality, roadmap, and task queue.
 - `blueprints/` stores immutable versions plus `current/` and project memory.
 - `.autopilot/bin/autopilot.mjs` is the deterministic controller.
-- `.autopilot/bin/control-plane.mjs` is the zero-model terminal dashboard.
+- `.autopilot/bin/control-plane.mjs` is the zero-model per-project terminal dashboard. The global dashboard adds arrow-selectable fleet actions and a bounded, dependency-free folder picker; neither invokes a model or executes candidate project code while browsing.
 - The globally installed `control-plane` command is the zero-model fleet dashboard. It reads `~/.agents/opencode-control-plane/projects.json` and opens the selected project's local dashboard on demand.
 - `.opencode/agents/` contains isolated worker, repair, and reviewer roles.
 - `.project/gates.json` maps approved test IDs to fixed argument arrays.
