@@ -118,6 +118,15 @@ async function interactive(root) {
       model.metadata = metadata;
       model.stale = false;
       if (model.message === "Loading current project state...") model.message = "Ready.";
+      if (
+        status.status === "running" &&
+        !status.controller_lock &&
+        /^Worker (?:started|resumed)\.$/.test(model.message)
+      ) {
+        model.message = status.controller_error?.message
+          ? `Worker stopped: ${safeText(status.controller_error.message, 700)}`
+          : "Worker stopped during startup. Review the preserved project state before resuming.";
+      }
     } catch (error) {
       if (serial !== model.pollSerial) return;
       model.stale = true;

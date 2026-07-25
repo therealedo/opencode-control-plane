@@ -38,9 +38,11 @@ The system should retain three clearly separated layers:
 
 Blueprint and migration history belong to the cold planning path. They must not be repeatedly loaded into the autonomous execution path.
 
-## Current baseline: v1.6.3
+Repository ownership and runtime placement are separate concerns. Durable product contracts and accepted evidence should remain reviewable with the project, while frequently written state, logs, locks, temporary phase contracts, and executable runtime files should move out of synchronized target repositories when this can be done without weakening recovery, portability, or rollback.
 
-Version 1.6.3 provides:
+## Current baseline: v1.6.4
+
+Version 1.6.4 carries forward the v1.6.3 baseline and provides:
 
 - modular, evolving blueprints;
 - deterministic scaffolding and upgrades;
@@ -73,6 +75,8 @@ Version 1.6.3 provides:
 - a narrowly guarded v1.6.1 recovery that refunds only an evidence-less repair proven to have changed no application files.
 - a one-click upgrade bridge for that exact blocked state, with the task baseline advanced to the reversible framework-upgrade commit before resume;
 - unchanged fail-closed upgrade behavior for running tasks, application changes, staged queue changes, and all other active transactions.
+- bounded synchronized-folder retries for transient `EPERM`, `EACCES`, and `EBUSY` atomic replacement failures;
+- precise stopped-controller diagnostics and a guarded resume action in the project dashboard.
 
 The fixed-context measurement and simulated evaluation remain regression guards, not proof of end-to-end token savings or unchanged implementation quality. Controlled live trials across models are the next step before further prompt compression or reduced-review policy.
 
@@ -87,6 +91,26 @@ On July 24, 2026, the greenfield case completed once per strategy with OpenCode 
 | Control Plane v1.6.1 | Yes | 14,028 | 634 | 1,793 | 9,216 | 149.4 s |
 
 Control Plane completed in one implementation attempt with zero repairs, one independent review, four successful strategy gates, no unexpected files, and no dependency additions. For this small, low-risk task, that extra assurance cost more input and elapsed time than either simpler strategy; this calibration does **not** show total-token savings. One repetition is directional evidence, not a statistically reliable benchmark. The next efficiency work should target phase input and risk-proportional review without weakening deterministic gates, followed by repeated trials across the full corpus before changing default policy.
+
+## Immediate maintenance: v1.6.4 reliability (shipped)
+
+**Goal:** make controller state transitions resilient to transient Windows and synchronized-folder file locks before undertaking broader storage refactoring.
+
+The current atomic-write design is correct in principle, but a real Proton Drive project showed that a transient `EPERM` rename failure can outlast the existing retry window and terminate the worker while leaving the dashboard open.
+
+Delivered outcomes:
+
+- Extended bounded retry and backoff for transient `EPERM`, `EACCES`, and `EBUSY` replacement failures without retrying permanent errors indefinitely.
+- Preserved the last durable state and a precise controller error when a replacement still cannot complete.
+- Made the dashboard distinguish an active worker from a dead worker immediately and explain the exact recovery action.
+- Added injected-lock tests covering a lock that clears within the retry window and one that remains locked beyond it.
+- Verified that a failed state write does not consume a semantic model attempt, lose application changes, or corrupt the task queue.
+
+Exit criteria:
+
+- A representative transient synchronized-folder lock recovers automatically.
+- A persistent lock fails closed with the project, attempt budget, and rollback evidence intact.
+- The dashboard does not continue to present a dead worker as resumed or active.
 
 ## Milestone 1: Evidence and truthful boundaries
 
@@ -140,7 +164,32 @@ Exit criteria:
 - A failed runtime change leaves the previous working configuration active.
 - Product architecture decisions remain distinct from execution preferences.
 
-## Milestone 3: Risk-aware token efficiency
+## Milestone 3: Runtime decoupling and durable state storage
+
+**Goal:** reduce managed-project footprint and eliminate synchronized-repository write churn without losing version pinning, project history, or one-command upgrades.
+
+**Status:** planned after the shipped v1.6.4 reliability patch. This is an architectural migration, not a prerequisite for safely resuming current projects.
+
+Planned outcomes:
+
+- Install Control Plane executables in a trusted, versioned global runtime cache instead of copying `.autopilot/bin/` into every project.
+- Keep supported runtime versions side by side and pin each project to an exact validated version; never silently substitute the newest runtime.
+- Move hot mutable state, logs, locks, sentinels, and temporary phase contracts to a bounded per-user local data directory keyed to the canonical project identity.
+- Keep blueprints, decisions, migration plans, gates, accepted queue history, and receipts project-owned and Git-reviewable where they provide durable product or verification evidence.
+- Retain a minimal project locator/configuration that can reconnect a clean clone to its pinned runtime and reconstruct safe ignored state.
+- Provide a one-command, reversible migration for existing projects, including projects paused at a safe maintenance boundary.
+- Preserve legacy project compatibility during a documented transition window; a missing runtime or state store must fail closed with an actionable recovery path.
+- Measure framework file count, bytes, write frequency, upgrade duration, and recovery behavior instead of optimizing for an arbitrary number of root files.
+
+Exit criteria:
+
+- Normal controller operation performs no high-frequency writes inside a synchronized project worktree.
+- A clean clone can restore the exact compatible runtime without copying mutable history from another machine.
+- Global upgrades preserve pinned older projects until their guarded project migration succeeds.
+- Existing projects migrate without application-code changes, blueprint loss, manual file moves, or worker interruption outside the maintenance boundary.
+- The new layout remains dependency-free and requires no daemon, database, or background model process.
+
+## Milestone 4: Risk-aware token efficiency
 
 **Goal:** spend model tokens in proportion to task risk while keeping deterministic checks mandatory.
 
@@ -152,6 +201,9 @@ Planned outcomes:
 - Never remove required tests, security checks, migration checks, or destructive-action approval to save tokens.
 - Prefer OpenCode's existing search and language intelligence before building or bundling a repository index.
 - Continue returning compact typed contracts while leaving full evidence in bounded artifacts.
+- Preserve diagnostic identity, relevant stack frames, the beginning and end of failing compiler/test output, and the exact active diff; keep full bounded artifacts available rather than applying an unsafe blanket no-truncation rule.
+- Measure repeated reads, evidence misses, repair success, and packet composition before adding any automatic full-file reinjection policy.
+- Attribute phase input to stable policy, selected project context, dynamic evidence, tool results, and independent review so optimizations target measured overhead.
 
 Possible policy, enabled only after evidence supports it:
 
@@ -164,9 +216,10 @@ Exit criteria:
 
 - End-to-end tokens per accepted task decrease on the evaluation corpus.
 - Acceptance quality, recovery success, and safety results do not regress.
+- Turn count, retries, false completion, and elapsed time remain visible alongside token use rather than being hidden by an aggregate.
 - Any reduced-review policy is narrow, reversible, and disabled automatically outside its proven risk class.
 
-## Milestone 4: Existing-project adoption
+## Milestone 5: Existing-project adoption
 
 **Goal:** bring an established repository under Control Plane without forcing a greenfield questionnaire or rewriting its history.
 
@@ -185,7 +238,7 @@ Exit criteria:
 - The resulting blueprint distinguishes observed facts, user-confirmed intent, and unresolved unknowns.
 - Adoption is materially shorter than new-project discovery.
 
-## Milestone 5: Optional real isolation
+## Milestone 6: Optional real isolation
 
 **Goal:** provide a stronger execution boundary for untrusted toolchains without burdening the default local workflow.
 
@@ -194,6 +247,7 @@ Planned outcomes:
 - Define one narrow controller-owned execution-backend contract.
 - Retain the fast local policy-bounded backend as the default.
 - Evaluate an optional container or VM backend for commands, package scripts, browsers, and native binaries.
+- Evaluate bounded CPU, memory, timeout, and process-tree cleanup guarantees per backend instead of treating containerization alone as proof of cleanup.
 - Keep secrets scoped to the selected phase and isolation environment.
 - Preserve inspectable logs, Git rollback, and deterministic gates across backends.
 - Avoid exposing isolation machinery to model prompts unless a worker must interact with it.
@@ -203,6 +257,7 @@ Exit criteria:
 - Documentation states exactly which threats each backend does and does not contain.
 - Projects that do not need OS isolation gain no mandatory services, daemons, databases, or model context.
 - A failed or unavailable optional backend cannot silently fall back to weaker isolation.
+- Controller termination removes or deterministically reaps the backend workload within a tested bounded interval.
 
 ## Conditional future work
 
@@ -215,6 +270,10 @@ Keep the current fresh-process execution while it remains simple and reliable. C
 ### Parallel tasks and worktrees
 
 Consider limited parallelism only when sequential task execution is a measured bottleneck. Require independent tasks, isolated worktrees, bounded concurrency, deterministic merge gates, and clear conflict recovery. Cross-project concurrency is preferable to multiple agents editing one project.
+
+### Intermediate recovery checkpoints
+
+Consider immutable Git checkpoint objects or private refs only if recovery testing shows that the existing baseline-plus-worktree model can lose useful intermediate work. A checkpoint must preserve the visible repair diff, avoid automatic destructive stashing, remain outside normal branch history, and have deterministic cleanup and rollback. Do not add branching merely to support hypothetical non-linear work; the existing validated task dependency DAG remains the default.
 
 ### Richer task dependencies
 
@@ -235,6 +294,13 @@ Every roadmap release must:
 - create a reversible Git commit for project framework changes;
 - validate clean installation, upgrade from every supported release, interruption recovery, and rollback;
 - document any changed boundary in beginner-facing language.
+
+## Measurement rules
+
+- Reliability targets use explicit bounded times and injected-failure tests; avoid untestable terms such as "instantly."
+- Footprint targets report managed files, bytes, write churn, and project-visible state; a small root-file count alone is not evidence of a clean architecture.
+- Token-efficiency claims require accepted common gates and include input, output, reasoning, cache use, turns, retries, repairs, reviews, elapsed time, and false completion.
+- Full evidence may remain in bounded artifacts while model context receives a precision-preserving projection; unlimited output is not a safety or quality requirement.
 
 ## Decision rules
 

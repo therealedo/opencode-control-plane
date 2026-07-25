@@ -14,7 +14,7 @@ import {
   readRuntimeSettings,
   writeRuntimeVariant,
 } from "../.agents/skills/init-project/assets/project/.autopilot/bin/lib/runtime-settings.mjs";
-import { createScaffold, readJson, run } from "./runtime-helpers.mjs";
+import { createScaffold, readJson, run, writeJson } from "./runtime-helpers.mjs";
 
 test("dashboard derives safe context actions without touching controller state", () => {
   assert.equal(primaryAction({ status: "idle" }).id, "start");
@@ -23,12 +23,46 @@ test("dashboard derives safe context actions without touching controller state",
   assert.equal(primaryAction({ status: "human_required" }).confirm, true);
   assert.equal(primaryAction({ status: "complete" }).enabled, false);
   assert.equal(controllerMode({ status: "running", controller_lock: null }).id, "interrupted");
+  assert.equal(primaryAction({
+    status: "running",
+    controller_lock: null,
+    controller_error: { code: "EPERM", message: "locked" },
+  }).confirm, true);
   assert.deepEqual(controllerArguments("start"), ["start", "--detach"]);
   assert.deepEqual(controllerArguments("maintenance"), ["maintenance"]);
   assert.throws(() => controllerArguments("delete"), /Unsupported controller action/);
   assert.equal(actionMenu({ status: "complete" }).find((item) => item.id === "change").enabled, true);
   assert.match(actionMenu({ status: "idle" }, { runtime_variant: "high" }).find((item) => item.id === "reasoning").label, /high/);
   assert.equal(actionMenu({ controller_lock: { pid: 7 } }, {}).find((item) => item.id === "reasoning").enabled, false);
+});
+
+test("dashboard exposes a stopped controller's precise recovery error", async (t) => {
+  const root = await createScaffold(t);
+  await writeJson(path.join(root, ".autopilot", "state.json"), {
+    ...(await readJson(path.join(root, ".autopilot", "state.json"))),
+    status: "running",
+    phase: "recovering",
+    active_task: "M001",
+    attempt: 1,
+  });
+  await writeJson(path.join(root, ".autopilot", "artifacts", "controller.log"), {
+    error: "EPERM: operation not permitted while replacing state.json",
+    code: "EPERM",
+    details: null,
+  });
+  const dashboard = path.join(root, ".autopilot", "bin", "control-plane.mjs");
+  const result = await run([process.execPath, dashboard, "--root", root, "--snapshot", "--json"], { cwd: root });
+  assert.equal(result.code, 0, result.stderr);
+  const snapshot = JSON.parse(result.stdout);
+  assert.deepEqual(snapshot.status.controller_error, {
+    code: "EPERM",
+    message: "EPERM: operation not permitted while replacing state.json",
+  });
+  assert.equal(snapshot.actions[0].label, "Resume after reviewing error");
+  assert.equal(snapshot.actions[0].confirm, true);
+  const rendered = renderDashboard({ status: snapshot.status, metadata: snapshot.metadata, width: 100 });
+  assert.match(rendered, /EPERM: operation not permitted/);
+  assert.match(rendered, /synchronization or the locking program/);
 });
 
 test("runtime reasoning is token-free, project-local, and reversible", async (t) => {
@@ -54,7 +88,7 @@ test("dashboard strips terminal control input and renders the public identity", 
       blocker: { message: injected },
       task_counts: { done: 1, blocked: 1 },
     },
-    metadata: { installed_version: "1.6.3", blueprint_version: 2, runtime_variant: "high" },
+    metadata: { installed_version: "1.6.4", blueprint_version: 2, runtime_variant: "high" },
     width: 88,
   });
   assert.match(rendered, /^OpenCode Control Plane/m);
@@ -71,7 +105,7 @@ test("noninteractive dashboard snapshot reports version, state, and visible acti
   assert.equal(result.code, 0, result.stderr);
   const snapshot = JSON.parse(result.stdout);
   assert.equal(snapshot.status.status, "idle");
-  assert.equal(snapshot.metadata.installed_version, "1.6.3");
+  assert.equal(snapshot.metadata.installed_version, "1.6.4");
   assert.equal(snapshot.metadata.runtime_variant, "default");
   assert.equal(snapshot.actions.length, 8);
   assert.equal(snapshot.actions[0].id, "start");

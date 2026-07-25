@@ -10,6 +10,7 @@ import {
   exists,
   findProjectRoot,
   nowIso,
+  readUtf8,
 } from "./lib/core.mjs";
 import { assertNoIssues, validateConfig } from "./lib/contracts.mjs";
 import { Controller } from "./lib/controller.mjs";
@@ -162,6 +163,7 @@ async function status(root) {
   const project = await loadProject(root);
   await assertControlTopology(project, { createMutable: true });
   const state = await loadState(project);
+  const controllerLock = await liveLock(project);
   let queue = null;
   try {
     queue = JSON.parse(await readFile(project.paths.queue, "utf8"));
@@ -170,7 +172,8 @@ async function status(root) {
   for (const task of Object.values(queue?.tasks ?? {})) counts[task.status] = (counts[task.status] ?? 0) + 1;
   return {
     ...state,
-    controller_lock: await liveLock(project),
+    controller_lock: controllerLock,
+    controller_error: controllerLock ? null : await readControllerError(project),
     pause_requested: await exists(project.paths.paused),
     stop_requested: await exists(project.paths.stop),
     maintenance_requested: await exists(project.paths.maintenance),
@@ -182,6 +185,22 @@ async function status(root) {
     active_task_attempt_limit: state.active_task ? queue?.tasks?.[state.active_task]?.attempt_limit ?? null : null,
     controller_log: path.relative(root, path.join(project.paths.artifacts, "controller.log")).replaceAll("\\", "/"),
   };
+}
+
+async function readControllerError(project) {
+  const file = path.join(project.paths.artifacts, "controller.log");
+  try {
+    const info = await assertPrivateFile(project.root, file, "controller log", { optional: true });
+    if (!info || info.size === 0 || info.size > 64 * 1024) return null;
+    const parsed = JSON.parse(await readUtf8(file, { maxBytes: 64 * 1024 }));
+    if (typeof parsed?.error !== "string" || !parsed.error.trim()) return null;
+    return {
+      code: typeof parsed.code === "string" && parsed.code ? parsed.code : "ERROR",
+      message: parsed.error,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function preflightError(error) {

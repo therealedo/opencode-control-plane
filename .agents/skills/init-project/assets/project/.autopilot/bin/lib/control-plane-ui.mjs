@@ -31,7 +31,14 @@ export function controllerMode(status = {}) {
   }
   if (status.stop_requested || status.phase === "stopped") return { id: "stopped", label: "Stopped", detail: "Resume when you are ready" };
   if (status.pause_requested || status.status === "paused") return { id: "paused", label: "Paused", detail: "Resume when you are ready" };
-  if (status.status === "running") return { id: "interrupted", label: "Interrupted", detail: "The worker is no longer running" };
+  if (status.status === "running") {
+    const error = safeText(status.controller_error?.message ?? "", 88);
+    return {
+      id: "interrupted",
+      label: "Interrupted",
+      detail: error ? `Stopped: ${error}` : "The worker is no longer running",
+    };
+  }
   if (status.status === "failed") return { id: "failed", label: "Needs attention", detail: "Inspect the blocker, then resume" };
   return { id: "idle", label: "Ready", detail: "Start autonomous work" };
 }
@@ -43,9 +50,13 @@ export function primaryAction(status = {}) {
   if (["paused", "stopped", "maintenance", "human_required", "failed", "interrupted"].includes(mode.id)) {
     return {
       id: "resume",
-      label: mode.id === "human_required" ? "Resume after resolving blocker" : "Resume worker",
+      label: mode.id === "human_required"
+        ? "Resume after resolving blocker"
+        : mode.id === "interrupted" && status.controller_error
+          ? "Resume after reviewing error"
+          : "Resume worker",
       enabled: true,
-      confirm: mode.id === "human_required",
+      confirm: mode.id === "human_required" || (mode.id === "interrupted" && Boolean(status.controller_error)),
     };
   }
   return { id: "start", label: "Start worker", enabled: true, confirm: false };
@@ -98,6 +109,8 @@ export function statusFingerprint(status = {}) {
     status.pause_requested ?? false,
     status.stop_requested ?? false,
     status.maintenance_requested ?? false,
+    status.controller_error?.code ?? null,
+    status.controller_error?.message ?? null,
   ]);
 }
 
@@ -122,10 +135,11 @@ export function renderDashboard({ status = {}, metadata = {}, activity = [], mes
     pair("Control Plane", `${safeText(metadata.installed_version ?? "legacy", 30)}${metadata.available_version && metadata.available_version !== metadata.installed_version ? ` -> ${safeText(metadata.available_version, 30)} available` : ""}`, usable),
   ];
 
-  if (status.blocker) {
+  const attention = status.blocker ?? interruptedAttention(status, mode);
+  if (attention) {
     output.push(line, "Needs your attention:");
-    output.push(`  ${fit(safeText(status.blocker.message ?? status.blocker.kind ?? "A blocker requires review."), usable - 2)}`);
-    if (status.blocker.required_action) output.push(`  Next: ${fit(safeText(status.blocker.required_action), usable - 8)}`);
+    output.push(`  ${fit(safeText(attention.message ?? attention.kind ?? "A blocker requires review."), usable - 2)}`);
+    if (attention.required_action) output.push(`  Next: ${fit(safeText(attention.required_action), usable - 8)}`);
   }
 
   output.push(line, busy ? "Actions (working...):" : "Actions (arrow keys + Enter, or the shown key):");
@@ -146,6 +160,18 @@ export function renderDashboard({ status = {}, metadata = {}, activity = [], mes
   }
   output.push(line, "Closing this dashboard does not stop the worker.");
   return output.join("\n");
+}
+
+function interruptedAttention(status, mode) {
+  if (mode.id !== "interrupted" || !status.controller_error) return null;
+  const code = safeText(status.controller_error.code ?? "ERROR", 64);
+  const locked = ["EACCES", "EBUSY", "EPERM"].includes(code);
+  return {
+    message: `${code}: ${safeText(status.controller_error.message ?? "The controller stopped unexpectedly.", 700)}`,
+    required_action: locked
+      ? "Let synchronization or the locking program release the project file, then resume."
+      : "Review the controller error and preserved project diff, then resume when the cause is resolved.",
+  };
 }
 
 function pair(label, value, width) {

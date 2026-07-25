@@ -13,6 +13,20 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 
+const TRANSIENT_RENAME_CODES = new Set(["EACCES", "EBUSY", "EPERM"]);
+export const TRANSIENT_RENAME_RETRY_DELAYS_MS = Object.freeze([
+  25,
+  50,
+  100,
+  200,
+  400,
+  800,
+  1200,
+  1800,
+  2400,
+  3000,
+]);
+
 export class AutopilotError extends Error {
   constructor(message, { code = "AUTOPILOT_ERROR", details = null } = {}) {
     super(message);
@@ -204,15 +218,18 @@ export async function atomicWriteFile(file, contents) {
   }
 }
 
-async function renameWithTransientRetry(source, destination) {
-  const delays = [10, 20, 40, 80, 160, 320, 640];
+export async function renameWithTransientRetry(source, destination, {
+  renameOperation = rename,
+  delayOperation = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  retryDelays = TRANSIENT_RENAME_RETRY_DELAYS_MS,
+} = {}) {
   for (let attempt = 0; ; attempt += 1) {
     try {
-      await rename(source, destination);
+      await renameOperation(source, destination);
       return;
     } catch (error) {
-      if (!new Set(["EACCES", "EBUSY", "EPERM"]).has(error?.code) || attempt >= delays.length) throw error;
-      await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+      if (!TRANSIENT_RENAME_CODES.has(error?.code) || attempt >= retryDelays.length) throw error;
+      await delayOperation(retryDelays[attempt]);
     }
   }
 }

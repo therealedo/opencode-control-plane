@@ -17,6 +17,11 @@ import test from "node:test"
 import { pathToFileURL } from "node:url"
 
 import {
+  renameWithTransientRetry,
+  TRANSIENT_RENAME_RETRY_DELAYS_MS,
+} from "../.agents/skills/init-project/assets/project/.autopilot/bin/lib/core.mjs"
+
+import {
   createScaffold,
   git,
   readJson,
@@ -33,6 +38,43 @@ const templateRoot = path.join(
   "assets",
   "project",
 )
+
+test("atomic replacement retries transient synchronized-folder locks within a bounded window", async () => {
+  const waits = []
+  let attempts = 0
+  await renameWithTransientRetry("source", "destination", {
+    renameOperation: async () => {
+      attempts += 1
+      if (attempts < 4) throw Object.assign(new Error("temporarily locked"), { code: "EPERM" })
+    },
+    delayOperation: async (milliseconds) => { waits.push(milliseconds) },
+  })
+  assert.equal(attempts, 4)
+  assert.deepEqual(waits, TRANSIENT_RENAME_RETRY_DELAYS_MS.slice(0, 3))
+})
+
+test("atomic replacement stops after the bounded lock retry window and never retries permanent errors", async () => {
+  let transientAttempts = 0
+  const persistent = Object.assign(new Error("still locked"), { code: "EBUSY" })
+  await assert.rejects(renameWithTransientRetry("source", "destination", {
+    renameOperation: async () => {
+      transientAttempts += 1
+      throw persistent
+    },
+    delayOperation: async () => {},
+  }), (error) => error === persistent)
+  assert.equal(transientAttempts, TRANSIENT_RENAME_RETRY_DELAYS_MS.length + 1)
+
+  let permanentAttempts = 0
+  await assert.rejects(renameWithTransientRetry("source", "destination", {
+    renameOperation: async () => {
+      permanentAttempts += 1
+      throw Object.assign(new Error("missing source"), { code: "ENOENT" })
+    },
+    delayOperation: async () => { throw new Error("must not wait") },
+  }), /missing source/)
+  assert.equal(permanentAttempts, 1)
+})
 
 const ignoredMutationAgent = String.raw`#!/usr/bin/env node
 import { mkdir, readFile, writeFile } from "node:fs/promises"
