@@ -53,14 +53,14 @@ control-plane
 The first screen shows all registered projects, which workers are running, progress, blueprint versions, problems, and available framework updates.
 
 - Up/Down selects a project; Left/Right selects a visible action; Enter runs it. The active project and option are highlighted in color, with visible arrow hints. Letter shortcuts still work.
-- O or **Open project** opens that project's full controls. It is highlighted by default when a project is available, so Enter opens it immediately.
+- O or **Open project** opens that project's full controls. It is highlighted by default when a project is available, so Enter opens it immediately. Inside that project, option 8 or Q returns to the main dashboard without pausing, stopping, resuming, or retrying the worker.
 - A or **Add project** opens an in-terminal folder picker. Type to see matching next folders, use Up/Down to choose, Right/Tab to browse into the selected folder, Left to go back, and Enter to validate and add the highlighted folder.
 - F forgets a missing or unwanted entry; it never deletes the project.
 - C checks GitHub for a new release.
 - U updates the Control Plane and registered projects safely.
 - Q closes only the dashboard; workers keep running.
 
-Inside a project you can set worker reasoning, check readiness, start, pause, stop, resume, update its blueprint, or return to the wide view. Pause first if you want to change reasoning while a project is already running. The old project-local `control-plane.cmd` or `./control-plane` launcher remains available as a fallback.
+Inside a project you can set worker reasoning, check readiness, start, pause, stop, resume, update its blueprint, or return to the wide view. Pause first if you want to change reasoning while a project is already running. The old project-local `control-plane.cmd` or `./control-plane` launcher remains available as a fallback; when launched directly, option 8 or Q closes it and returns a usable terminal while the worker keeps running.
 
 The dashboard runs only while its terminal is open. There is no server, daemon, browser UI, database, or background model session.
 

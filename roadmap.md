@@ -2,6 +2,8 @@
 
 This roadmap turns the July 2026 ecosystem review into an ordered development direction. It is intentionally conservative: preserve the parts that make Control Plane small and dependable, measure real outcomes before optimizing further, and add complexity only when project evidence justifies it.
 
+Checked items are shipped and verified. Unchecked items are planned or still need evidence. Each release should check completed work here instead of replacing the history.
+
 ## North star
 
 OpenCode Control Plane should be a lean, terminal-native, deterministic lifecycle supervisor for OpenCode. It should run fresh, policy-bounded workers, verify their output, preserve evolving project intent, recover safely, and keep the orchestration layer free of model calls.
@@ -40,45 +42,67 @@ Blueprint and migration history belong to the cold planning path. They must not 
 
 Repository ownership and runtime placement are separate concerns. Durable product contracts and accepted evidence should remain reviewable with the project, while frequently written state, logs, locks, temporary phase contracts, and executable runtime files should move out of synchronized target repositories when this can be done without weakening recovery, portability, or rollback.
 
-## Current baseline: v1.6.4
+## Current baseline: v1.6.5
 
-Version 1.6.4 carries forward the v1.6.3 baseline and provides:
+Version 1.6.5 carries forward the v1.6.4 baseline and provides:
 
-- modular, evolving blueprints;
-- deterministic scaffolding and upgrades;
-- fresh OpenCode sessions for bounded phases;
-- selected and byte-bounded context packets;
-- fixed tests and independent review;
-- durable Git, state, receipt, and recovery evidence;
-- a global terminal dashboard;
-- measured reduction of framework-owned fixed prompt bytes.
-- a pre-launch checkpoint and token-free dashboard control for provider reasoning variants;
-- automatic upgrade of an older in-progress initialization scaffold before its first worker starts.
-- a visible arrow-selectable global action menu while retaining direct keyboard shortcuts;
-- a high-contrast, color-aware selector with visible horizontal and vertical navigation cues;
-- a dependency-free, live folder-suggestion picker for adding initialized projects without memorizing paths;
-- stricter skill wording that reserves human stops for genuinely human-resolvable boundaries.
-- a versioned, dependency-free evaluation corpus for seven representative development and recovery scenarios;
-- Direct OpenCode, minimal fresh-loop, and Control Plane trial modes that use only evaluator-owned disposable projects;
-- strict provider-event telemetry, per-dimension token/cost budgets, atomic resume state, and JSON plus Markdown results;
-- deterministic no-model simulation for release checks, while real model trials remain explicit opt-in work;
-- accurate public wording: local execution is policy-bounded and self-verifying, not an operating-system sandbox.
-- Blueprint schema 6 with deterministic per-task Conventional Commit prefixes and fixed controller bookkeeping;
-- zero-token commit selection from protected configuration rather than worker inference;
-- unchanged support for Blueprint schema 5 and fixed-prefix initialized projects;
-- a hash-verified, blueprint-preserving refresh that lets an older active interview finalize without restarting.
-- a single authoritative, policy-validated Git changed-file record instead of a redundant worker-contract snapshot;
-- backwards-compatible acceptance of the legacy `changed_files` contract field during project upgrades;
-- strict recovery of provider usage from controller state when a phase fails before creating a task receipt;
-- matching 4 MiB evaluator/worker output ceilings, Windows long-path Git isolation, and bounded calibration subsets.
-- evidence-aware interruption recovery that re-enters implementation when no repair fingerprint exists;
-- a narrowly guarded v1.6.1 recovery that refunds only an evidence-less repair proven to have changed no application files.
-- a one-click upgrade bridge for that exact blocked state, with the task baseline advanced to the reversible framework-upgrade commit before resume;
-- unchanged fail-closed upgrade behavior for running tasks, application changes, staged queue changes, and all other active transactions.
-- bounded synchronized-folder retries for transient `EPERM`, `EACCES`, and `EBUSY` atomic replacement failures;
-- precise stopped-controller diagnostics and a guarded resume action in the project dashboard.
+- [x] Modular, evolving blueprints.
+- [x] Deterministic scaffolding and upgrades.
+- [x] Fresh OpenCode sessions for bounded phases.
+- [x] Selected and byte-bounded context packets.
+- [x] Fixed tests and independent review.
+- [x] Durable Git, state, receipt, and recovery evidence.
+- [x] A global terminal dashboard.
+- [x] Measured reduction of framework-owned fixed prompt bytes.
+- [x] A pre-launch checkpoint and token-free dashboard control for provider reasoning variants.
+- [x] Automatic upgrade of an older in-progress initialization scaffold before its first worker starts.
+- [x] A visible arrow-selectable global action menu while retaining direct keyboard shortcuts.
+- [x] A high-contrast, color-aware selector with visible horizontal and vertical navigation cues.
+- [x] A dependency-free, live folder-suggestion picker for adding initialized projects without memorizing paths.
+- [x] Stricter skill wording that reserves human stops for genuinely human-resolvable boundaries.
+- [x] A versioned, dependency-free evaluation corpus for seven representative development and recovery scenarios.
+- [x] Direct OpenCode, minimal fresh-loop, and Control Plane trial modes that use only evaluator-owned disposable projects.
+- [x] Strict provider-event telemetry, per-dimension token/cost budgets, atomic resume state, and JSON plus Markdown results.
+- [x] Deterministic no-model simulation for release checks, while real model trials remain explicit opt-in work.
+- [x] Accurate public wording: local execution is policy-bounded and self-verifying, not an operating-system sandbox.
+- [x] Blueprint schema 6 with deterministic per-task Conventional Commit prefixes and fixed controller bookkeeping.
+- [x] Zero-token commit selection from protected configuration rather than worker inference.
+- [x] Unchanged support for Blueprint schema 5 and fixed-prefix initialized projects.
+- [x] A hash-verified, blueprint-preserving refresh that lets an older active interview finalize without restarting.
+- [x] A single authoritative, policy-validated Git changed-file record instead of a redundant worker-contract snapshot.
+- [x] Backwards-compatible acceptance of the legacy `changed_files` contract field during project upgrades.
+- [x] Strict recovery of provider usage from controller state when a phase fails before creating a task receipt.
+- [x] Matching 4 MiB evaluator/worker output ceilings, Windows long-path Git isolation, and bounded calibration subsets.
+- [x] Evidence-aware interruption recovery that re-enters implementation when no repair fingerprint exists.
+- [x] A narrowly guarded v1.6.1 recovery that refunds only an evidence-less repair proven to have changed no application files.
+- [x] A one-click upgrade bridge for that exact blocked state, with the task baseline advanced to the reversible framework-upgrade commit before resume.
+- [x] Unchanged fail-closed upgrade behavior for running tasks, application changes, staged queue changes, and all other active transactions.
+- [x] Bounded synchronized-folder retries for transient `EPERM`, `EACCES`, and `EBUSY` atomic replacement failures.
+- [x] Precise stopped-controller diagnostics and a guarded resume action in the project dashboard.
+- [x] Context-aware option 8: return to the main fleet dashboard when nested, or close to a usable shell when launched directly.
+- [x] A backwards-compatible fleet marker that does not prevent older project dashboards from opening during staggered upgrades.
+- [x] A checkbox-based roadmap that preserves completed work and makes pending work directly trackable.
 
 The fixed-context measurement and simulated evaluation remain regression guards, not proof of end-to-end token savings or unchanged implementation quality. Controlled live trials across models are the next step before further prompt compression or reduced-review policy.
+
+## Immediate maintenance: v1.6.5 dashboard navigation (shipped)
+
+**Goal:** make project-dashboard navigation explicit and ensure leaving the dashboard never traps the terminal or changes autonomous worker state.
+
+Delivered outcomes:
+
+- [x] Pause the project dashboard's input stream during cleanup so the Node process exits and releases the terminal.
+- [x] Show **Back to main dashboard** as option 8 when a project was opened from the global fleet view.
+- [x] Keep **Close dashboard only** for direct project-dashboard launches and return to a usable shell.
+- [x] Preserve option 8 and Q as navigation-only actions with no pause, stop, resume, or attempt mutation.
+- [x] Use a backwards-compatible inherited marker that older project dashboards safely ignore.
+- [x] Add regression coverage for terminal cleanup, menu context, mixed-version navigation, and rendered guidance.
+
+Exit criteria:
+
+- [x] Returning from a fleet-opened project restores the main dashboard.
+- [x] Closing a directly launched project dashboard restores an interactive terminal.
+- [x] Leaving either dashboard does not stop the worker or consume an attempt.
 
 ### First controlled live calibration
 
@@ -100,17 +124,17 @@ The current atomic-write design is correct in principle, but a real Proton Drive
 
 Delivered outcomes:
 
-- Extended bounded retry and backoff for transient `EPERM`, `EACCES`, and `EBUSY` replacement failures without retrying permanent errors indefinitely.
-- Preserved the last durable state and a precise controller error when a replacement still cannot complete.
-- Made the dashboard distinguish an active worker from a dead worker immediately and explain the exact recovery action.
-- Added injected-lock tests covering a lock that clears within the retry window and one that remains locked beyond it.
-- Verified that a failed state write does not consume a semantic model attempt, lose application changes, or corrupt the task queue.
+- [x] Extended bounded retry and backoff for transient `EPERM`, `EACCES`, and `EBUSY` replacement failures without retrying permanent errors indefinitely.
+- [x] Preserved the last durable state and a precise controller error when a replacement still cannot complete.
+- [x] Made the dashboard distinguish an active worker from a dead worker immediately and explain the exact recovery action.
+- [x] Added injected-lock tests covering a lock that clears within the retry window and one that remains locked beyond it.
+- [x] Verified that a failed state write does not consume a semantic model attempt, lose application changes, or corrupt the task queue.
 
 Exit criteria:
 
-- A representative transient synchronized-folder lock recovers automatically.
-- A persistent lock fails closed with the project, attempt budget, and rollback evidence intact.
-- The dashboard does not continue to present a dead worker as resumed or active.
+- [x] A representative transient synchronized-folder lock recovers automatically.
+- [x] A persistent lock fails closed with the project, attempt budget, and rollback evidence intact.
+- [x] The dashboard does not continue to present a dead worker as resumed or active.
 
 ## Milestone 1: Evidence and truthful boundaries
 
@@ -120,21 +144,21 @@ Exit criteria:
 
 Planned outcomes:
 
-- Repeatable corpus for greenfield work, feature changes, bug repair, integration changes, blueprint migration, interruption recovery, and failed verification: **shipped**.
-- Direct OpenCode, minimal fresh-session loop, and Control Plane trial modes on equivalent disposable tasks: **shipped**.
-- Strict input, cache-read, cache-write, reasoning, output, and provider-cost collection—not prompt bytes alone: **shipped; first live calibration recorded**.
-- Retries, repairs, elapsed time, unnecessary files/dependencies, false completion, gate results, and final common acceptance: **shipped; first live calibration recorded**.
-- Model/provider/profile identity separated from framework-owned measurements: **shipped**.
-- Accurate application-level **policy boundary** language without implying operating-system isolation: **shipped**.
-- Existing independent reviewer and deterministic safety gates retained while gathering the baseline: **shipped**.
-- Repeated live baselines for supported model/profile combinations, including failures and incomplete telemetry: **pending**.
+- [x] Repeatable corpus for greenfield work, feature changes, bug repair, integration changes, blueprint migration, interruption recovery, and failed verification.
+- [x] Direct OpenCode, minimal fresh-session loop, and Control Plane trial modes on equivalent disposable tasks.
+- [x] Strict input, cache-read, cache-write, reasoning, output, and provider-cost collection—not prompt bytes alone; first live calibration recorded.
+- [x] Retries, repairs, elapsed time, unnecessary files/dependencies, false completion, gate results, and final common acceptance; first live calibration recorded.
+- [x] Model/provider/profile identity separated from framework-owned measurements.
+- [x] Accurate application-level **policy boundary** language without implying operating-system isolation.
+- [x] Existing independent reviewer and deterministic safety gates retained while gathering the baseline.
+- [ ] Repeated live baselines for supported model/profile combinations, including failures and incomplete telemetry.
 
 Exit criteria:
 
-- The same evaluation can be rerun with another supported model.
-- Results identify where tokens are actually spent across implementation, repair, review, and tool use.
-- Quality and recovery failures are visible rather than averaged away.
-- Product descriptions consistently distinguish policy-bounded execution from real container or VM isolation.
+- [x] The same evaluation can be rerun with another supported model.
+- [x] Results identify where tokens are actually spent across implementation, repair, review, and tool use.
+- [x] Quality and recovery failures are visible rather than averaged away.
+- [x] Product descriptions consistently distinguish policy-bounded execution from real container or VM isolation.
 
 ## Milestone 2: Operational configuration
 
@@ -142,27 +166,27 @@ Exit criteria:
 
 **Status:** in progress. Version 1.3 shipped the first vertical slice:
 
-- initialization now stops at an explicit ready checkpoint before the first worker;
-- the terminal dashboard changes provider reasoning variants without a model call or blueprint revision;
-- the selected variant is injected into every fresh policy-bounded worker phase;
-- an interview started on v1.2 upgrades its finalized scaffold automatically and preserves all answers before pausing;
-- the runtime setting is project-local, ignored by Git, disabled while a worker is live, and reversible to the provider default.
+- [x] Initialization stops at an explicit ready checkpoint before the first worker.
+- [x] The terminal dashboard changes provider reasoning variants without a model call or blueprint revision.
+- [x] The selected variant is injected into every fresh policy-bounded worker phase.
+- [x] An interview started on v1.2 upgrades its finalized scaffold automatically and preserves all answers before pausing.
+- [x] The runtime setting is project-local, ignored by Git, disabled while a worker is live, and reversible to the provider default.
 
 Remaining outcomes:
 
-- Move model selection, cost limits, and the remaining runtime choices out of the product contract.
-- Keep a project default while allowing safe global or phase-specific overrides.
-- Allow model changes from the terminal dashboard at a maintenance boundary.
-- Do not create a new blueprint version merely because a model changed.
-- Validate model availability and OpenCode compatibility before activation.
-- Preserve the previous runtime profile for immediate rollback.
-- Establish and test a minimum supported OpenCode version and capability contract.
+- [ ] Move model selection, cost limits, and the remaining runtime choices out of the product contract.
+- [ ] Keep a project default while allowing safe global or phase-specific overrides.
+- [ ] Allow model changes from the terminal dashboard at a maintenance boundary.
+- [ ] Do not create a new blueprint version merely because a model changed.
+- [ ] Validate model availability and OpenCode compatibility before activation.
+- [ ] Preserve the previous runtime profile for immediate rollback.
+- [ ] Establish and test a minimum supported OpenCode version and capability contract.
 
 Exit criteria:
 
-- A project can switch to a better model midway through development without reinitialization or blueprint migration.
-- A failed runtime change leaves the previous working configuration active.
-- Product architecture decisions remain distinct from execution preferences.
+- [ ] A project can switch to a better model midway through development without reinitialization or blueprint migration.
+- [ ] A failed runtime change leaves the previous working configuration active.
+- [ ] Product architecture decisions remain distinct from execution preferences.
 
 ## Milestone 3: Runtime decoupling and durable state storage
 
@@ -172,22 +196,22 @@ Exit criteria:
 
 Planned outcomes:
 
-- Install Control Plane executables in a trusted, versioned global runtime cache instead of copying `.autopilot/bin/` into every project.
-- Keep supported runtime versions side by side and pin each project to an exact validated version; never silently substitute the newest runtime.
-- Move hot mutable state, logs, locks, sentinels, and temporary phase contracts to a bounded per-user local data directory keyed to the canonical project identity.
-- Keep blueprints, decisions, migration plans, gates, accepted queue history, and receipts project-owned and Git-reviewable where they provide durable product or verification evidence.
-- Retain a minimal project locator/configuration that can reconnect a clean clone to its pinned runtime and reconstruct safe ignored state.
-- Provide a one-command, reversible migration for existing projects, including projects paused at a safe maintenance boundary.
-- Preserve legacy project compatibility during a documented transition window; a missing runtime or state store must fail closed with an actionable recovery path.
-- Measure framework file count, bytes, write frequency, upgrade duration, and recovery behavior instead of optimizing for an arbitrary number of root files.
+- [ ] Install Control Plane executables in a trusted, versioned global runtime cache instead of copying `.autopilot/bin/` into every project.
+- [ ] Keep supported runtime versions side by side and pin each project to an exact validated version; never silently substitute the newest runtime.
+- [ ] Move hot mutable state, logs, locks, sentinels, and temporary phase contracts to a bounded per-user local data directory keyed to the canonical project identity.
+- [ ] Keep blueprints, decisions, migration plans, gates, accepted queue history, and receipts project-owned and Git-reviewable where they provide durable product or verification evidence.
+- [ ] Retain a minimal project locator/configuration that can reconnect a clean clone to its pinned runtime and reconstruct safe ignored state.
+- [ ] Provide a one-command, reversible migration for existing projects, including projects paused at a safe maintenance boundary.
+- [ ] Preserve legacy project compatibility during a documented transition window; a missing runtime or state store must fail closed with an actionable recovery path.
+- [ ] Measure framework file count, bytes, write frequency, upgrade duration, and recovery behavior instead of optimizing for an arbitrary number of root files.
 
 Exit criteria:
 
-- Normal controller operation performs no high-frequency writes inside a synchronized project worktree.
-- A clean clone can restore the exact compatible runtime without copying mutable history from another machine.
-- Global upgrades preserve pinned older projects until their guarded project migration succeeds.
-- Existing projects migrate without application-code changes, blueprint loss, manual file moves, or worker interruption outside the maintenance boundary.
-- The new layout remains dependency-free and requires no daemon, database, or background model process.
+- [ ] Normal controller operation performs no high-frequency writes inside a synchronized project worktree.
+- [ ] A clean clone can restore the exact compatible runtime without copying mutable history from another machine.
+- [ ] Global upgrades preserve pinned older projects until their guarded project migration succeeds.
+- [ ] Existing projects migrate without application-code changes, blueprint loss, manual file moves, or worker interruption outside the maintenance boundary.
+- [ ] The new layout remains dependency-free and requires no daemon, database, or background model process.
 
 ## Milestone 4: Risk-aware token efficiency
 
@@ -195,15 +219,15 @@ Exit criteria:
 
 Planned outcomes:
 
-- Assign a deterministic risk class using affected paths, task type, credentials, migrations, architecture, data, security, and deployment impact.
-- Measure the value and cost of independent review for each risk class.
-- Keep independent review as the default until evaluation demonstrates an equal-quality lower-cost policy for a specific class.
-- Never remove required tests, security checks, migration checks, or destructive-action approval to save tokens.
-- Prefer OpenCode's existing search and language intelligence before building or bundling a repository index.
-- Continue returning compact typed contracts while leaving full evidence in bounded artifacts.
-- Preserve diagnostic identity, relevant stack frames, the beginning and end of failing compiler/test output, and the exact active diff; keep full bounded artifacts available rather than applying an unsafe blanket no-truncation rule.
-- Measure repeated reads, evidence misses, repair success, and packet composition before adding any automatic full-file reinjection policy.
-- Attribute phase input to stable policy, selected project context, dynamic evidence, tool results, and independent review so optimizations target measured overhead.
+- [ ] Assign a deterministic risk class using affected paths, task type, credentials, migrations, architecture, data, security, and deployment impact.
+- [ ] Measure the value and cost of independent review for each risk class.
+- [ ] Keep independent review as the default until evaluation demonstrates an equal-quality lower-cost policy for a specific class.
+- [ ] Never remove required tests, security checks, migration checks, or destructive-action approval to save tokens.
+- [ ] Prefer OpenCode's existing search and language intelligence before building or bundling a repository index.
+- [ ] Continue returning compact typed contracts while leaving full evidence in bounded artifacts.
+- [ ] Preserve diagnostic identity, relevant stack frames, the beginning and end of failing compiler/test output, and the exact active diff; keep full bounded artifacts available rather than applying an unsafe blanket no-truncation rule.
+- [ ] Measure repeated reads, evidence misses, repair success, and packet composition before adding any automatic full-file reinjection policy.
+- [ ] Attribute phase input to stable policy, selected project context, dynamic evidence, tool results, and independent review so optimizations target measured overhead.
 
 Possible policy, enabled only after evidence supports it:
 
@@ -214,10 +238,10 @@ Possible policy, enabled only after evidence supports it:
 
 Exit criteria:
 
-- End-to-end tokens per accepted task decrease on the evaluation corpus.
-- Acceptance quality, recovery success, and safety results do not regress.
-- Turn count, retries, false completion, and elapsed time remain visible alongside token use rather than being hidden by an aggregate.
-- Any reduced-review policy is narrow, reversible, and disabled automatically outside its proven risk class.
+- [ ] End-to-end tokens per accepted task decrease on the evaluation corpus.
+- [ ] Acceptance quality, recovery success, and safety results do not regress.
+- [ ] Turn count, retries, false completion, and elapsed time remain visible alongside token use rather than being hidden by an aggregate.
+- [ ] Any reduced-review policy is narrow, reversible, and disabled automatically outside its proven risk class.
 
 ## Milestone 5: Existing-project adoption
 
@@ -225,18 +249,18 @@ Exit criteria:
 
 Planned outcomes:
 
-- Inspect existing structure, tests, integrations, and architecture using bounded reads.
-- Ask only for consequential facts that cannot be recovered from the repository.
-- Create an initial blueprint and project memory representing the system as it exists.
-- Preserve application files and accepted Git history byte-for-byte during planning.
-- Require comparison, approval, and rollback for generated control files.
-- Begin autonomous work only after readiness and safety boundaries are explicit.
+- [ ] Inspect existing structure, tests, integrations, and architecture using bounded reads.
+- [ ] Ask only for consequential facts that cannot be recovered from the repository.
+- [ ] Create an initial blueprint and project memory representing the system as it exists.
+- [ ] Preserve application files and accepted Git history byte-for-byte during planning.
+- [ ] Require comparison, approval, and rollback for generated control files.
+- [ ] Begin autonomous work only after readiness and safety boundaries are explicit.
 
 Exit criteria:
 
-- An existing project can be adopted without destructive regeneration.
-- The resulting blueprint distinguishes observed facts, user-confirmed intent, and unresolved unknowns.
-- Adoption is materially shorter than new-project discovery.
+- [ ] An existing project can be adopted without destructive regeneration.
+- [ ] The resulting blueprint distinguishes observed facts, user-confirmed intent, and unresolved unknowns.
+- [ ] Adoption is materially shorter than new-project discovery.
 
 ## Milestone 6: Optional real isolation
 
@@ -244,20 +268,20 @@ Exit criteria:
 
 Planned outcomes:
 
-- Define one narrow controller-owned execution-backend contract.
-- Retain the fast local policy-bounded backend as the default.
-- Evaluate an optional container or VM backend for commands, package scripts, browsers, and native binaries.
-- Evaluate bounded CPU, memory, timeout, and process-tree cleanup guarantees per backend instead of treating containerization alone as proof of cleanup.
-- Keep secrets scoped to the selected phase and isolation environment.
-- Preserve inspectable logs, Git rollback, and deterministic gates across backends.
-- Avoid exposing isolation machinery to model prompts unless a worker must interact with it.
+- [ ] Define one narrow controller-owned execution-backend contract.
+- [ ] Retain the fast local policy-bounded backend as the default.
+- [ ] Evaluate an optional container or VM backend for commands, package scripts, browsers, and native binaries.
+- [ ] Evaluate bounded CPU, memory, timeout, and process-tree cleanup guarantees per backend instead of treating containerization alone as proof of cleanup.
+- [ ] Keep secrets scoped to the selected phase and isolation environment.
+- [ ] Preserve inspectable logs, Git rollback, and deterministic gates across backends.
+- [ ] Avoid exposing isolation machinery to model prompts unless a worker must interact with it.
 
 Exit criteria:
 
-- Documentation states exactly which threats each backend does and does not contain.
-- Projects that do not need OS isolation gain no mandatory services, daemons, databases, or model context.
-- A failed or unavailable optional backend cannot silently fall back to weaker isolation.
-- Controller termination removes or deterministically reaps the backend workload within a tested bounded interval.
+- [ ] Documentation states exactly which threats each backend does and does not contain.
+- [ ] Projects that do not need OS isolation gain no mandatory services, daemons, databases, or model context.
+- [ ] A failed or unavailable optional backend cannot silently fall back to weaker isolation.
+- [ ] Controller termination removes or deterministically reaps the backend workload within a tested bounded interval.
 
 ## Conditional future work
 

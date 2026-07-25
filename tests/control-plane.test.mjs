@@ -14,6 +14,10 @@ import {
   readRuntimeSettings,
   writeRuntimeVariant,
 } from "../.agents/skills/init-project/assets/project/.autopilot/bin/lib/runtime-settings.mjs";
+import {
+  parseArgs as parseDashboardArgs,
+  restoreTerminalInput,
+} from "../.agents/skills/init-project/assets/project/.autopilot/bin/control-plane.mjs";
 import { createScaffold, readJson, run, writeJson } from "./runtime-helpers.mjs";
 
 test("dashboard derives safe context actions without touching controller state", () => {
@@ -30,10 +34,25 @@ test("dashboard derives safe context actions without touching controller state",
   }).confirm, true);
   assert.deepEqual(controllerArguments("start"), ["start", "--detach"]);
   assert.deepEqual(controllerArguments("maintenance"), ["maintenance"]);
+  assert.throws(() => controllerArguments("quit"), /Unsupported controller action/);
   assert.throws(() => controllerArguments("delete"), /Unsupported controller action/);
   assert.equal(actionMenu({ status: "complete" }).find((item) => item.id === "change").enabled, true);
   assert.match(actionMenu({ status: "idle" }, { runtime_variant: "high" }).find((item) => item.id === "reasoning").label, /high/);
   assert.equal(actionMenu({ controller_lock: { pid: 7 } }, {}).find((item) => item.id === "reasoning").enabled, false);
+  assert.equal(actionMenu({}, {}).at(-1).label, "Close dashboard only");
+  assert.equal(actionMenu({}, { return_to_fleet: true }).at(-1).label, "Back to main dashboard");
+});
+
+test("dashboard releases terminal input and identifies a fleet return", () => {
+  const calls = [];
+  restoreTerminalInput({
+    setRawMode(value) { calls.push(["raw", value]); },
+    pause() { calls.push(["pause"]); },
+  });
+  assert.deepEqual(calls, [["raw", false], ["pause"]]);
+  assert.equal(parseDashboardArgs([], {
+    env: { OPENCODE_CONTROL_PLANE_PARENT_DASHBOARD: "1" },
+  }).returnToFleet, true);
 });
 
 test("dashboard exposes a stopped controller's precise recovery error", async (t) => {
@@ -88,7 +107,7 @@ test("dashboard strips terminal control input and renders the public identity", 
       blocker: { message: injected },
       task_counts: { done: 1, blocked: 1 },
     },
-    metadata: { installed_version: "1.6.4", blueprint_version: 2, runtime_variant: "high" },
+    metadata: { installed_version: "1.6.5", blueprint_version: 2, runtime_variant: "high" },
     width: 88,
   });
   assert.match(rendered, /^OpenCode Control Plane/m);
@@ -105,10 +124,31 @@ test("noninteractive dashboard snapshot reports version, state, and visible acti
   assert.equal(result.code, 0, result.stderr);
   const snapshot = JSON.parse(result.stdout);
   assert.equal(snapshot.status.status, "idle");
-  assert.equal(snapshot.metadata.installed_version, "1.6.4");
+  assert.equal(snapshot.metadata.installed_version, "1.6.5");
   assert.equal(snapshot.metadata.runtime_variant, "default");
   assert.equal(snapshot.actions.length, 8);
   assert.equal(snapshot.actions[0].id, "start");
+});
+
+test("fleet-opened project snapshot exposes a return action", async (t) => {
+  const root = await createScaffold(t);
+  const dashboard = path.join(root, ".autopilot", "bin", "control-plane.mjs");
+  const result = await run([
+    process.execPath,
+    dashboard,
+    "--root",
+    root,
+    "--snapshot",
+    "--json",
+  ], {
+    cwd: root,
+    env: { ...process.env, OPENCODE_CONTROL_PLANE_PARENT_DASHBOARD: "1" },
+  });
+  assert.equal(result.code, 0, result.stderr);
+  const snapshot = JSON.parse(result.stdout);
+  assert.equal(snapshot.metadata.return_to_fleet, true);
+  assert.equal(snapshot.actions.at(-1).label, "Back to main dashboard");
+  assert.match(renderDashboard({ status: snapshot.status, metadata: snapshot.metadata }), /Returning to the main dashboard/);
 });
 
 test("Windows dashboard launcher resolves its project root and preserves Node exit codes", {

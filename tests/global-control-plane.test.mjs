@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { registerProject } from "../.agents/skills/init-project/bin/lib/project-registry.mjs";
+import { projectDashboardEnvironment } from "../.agents/skills/init-project/bin/control-plane-global.mjs";
 import {
   fleetActionMenu,
   nextFleetAction,
@@ -26,7 +27,7 @@ test("fleet actions are arrow-selectable while preserving shortcut keys", () => 
   assert.equal(withoutProject[2].enabled, false);
   assert.equal(nextFleetAction(withoutProject, 0, 1), 1);
 
-  const rendered = renderFleet({ projects: [project], selected: 0, selectedAction: 1, update: { installed_version: "1.6.4" } });
+  const rendered = renderFleet({ projects: [project], selected: 0, selectedAction: 1, update: { installed_version: "1.6.5" } });
   assert.match(rendered, /Actions  ←\/→ select/);
   assert.match(rendered, /↑\/↓/);
   assert.match(rendered, /\[A: Add project\]/);
@@ -36,11 +37,18 @@ test("fleet actions are arrow-selectable while preserving shortcut keys", () => 
     projects: [project],
     selected: 0,
     selectedAction: 1,
-    update: { installed_version: "1.6.4" },
+    update: { installed_version: "1.6.5" },
     color: true,
   });
   assert.match(colored, /\x1b\[1;36m▶ Producer Scribe/);
   assert.match(colored, /\x1b\[1;30;46m← \[A: Add project\] →\x1b\[0m/);
+});
+
+test("fleet-opened project dashboards receive a backwards-compatible parent marker", () => {
+  assert.deepEqual(projectDashboardEnvironment({ PATH: "test-path" }), {
+    PATH: "test-path",
+    OPENCODE_CONTROL_PLANE_PARENT_DASHBOARD: "1",
+  });
 });
 
 test("fleet colors respect terminal capability and standard opt-outs", () => {
@@ -59,14 +67,14 @@ test("fleet rendering stays inside the requested terminal height", () => {
     mode: { id: index === 0 ? "running" : "idle", label: index === 0 ? "Running" : "Ready" },
     status: {},
     blueprint_version: 1,
-    control_plane_version: "1.6.4",
+    control_plane_version: "1.6.5",
   }));
   const height = 24;
   const rendered = renderFleet({
     projects,
     selected: 15,
     selectedAction: 0,
-    update: { installed_version: "1.6.4" },
+    update: { installed_version: "1.6.5" },
     message: "Ready.",
     width: 64,
     height,

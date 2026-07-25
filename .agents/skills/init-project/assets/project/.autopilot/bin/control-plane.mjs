@@ -29,8 +29,14 @@ const options = parseArgs(process.argv.slice(2));
 
 if (isMain()) await main().catch(fatal);
 
-function parseArgs(argv) {
-  const result = { root: null, snapshot: false, json: false, color: !process.env.NO_COLOR };
+function parseArgs(argv, { env = process.env } = {}) {
+  const result = {
+    root: null,
+    snapshot: false,
+    json: false,
+    color: !env.NO_COLOR,
+    returnToFleet: env.OPENCODE_CONTROL_PLANE_PARENT_DASHBOARD === "1",
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === "--root") {
@@ -52,8 +58,9 @@ async function main() {
   const root = await findProjectRoot(options.root ? path.resolve(options.root) : process.cwd());
   if (options.snapshot || !process.stdin.isTTY || !process.stdout.isTTY) {
     const [status, metadata] = await Promise.all([readStatus(root), readMetadata(root)]);
-    if (options.json) process.stdout.write(`${JSON.stringify({ status, metadata, actions: actionMenu(status, metadata) }, null, 2)}\n`);
-    else process.stdout.write(`${renderDashboard({ status, metadata, width: process.stdout.columns ?? 88 })}\n`);
+    const viewMetadata = { ...metadata, return_to_fleet: options.returnToFleet };
+    if (options.json) process.stdout.write(`${JSON.stringify({ status, metadata: viewMetadata, actions: actionMenu(status, viewMetadata) }, null, 2)}\n`);
+    else process.stdout.write(`${renderDashboard({ status, metadata: viewMetadata, width: process.stdout.columns ?? 88 })}\n`);
     return;
   }
   await interactive(root);
@@ -87,7 +94,7 @@ async function interactive(root) {
   };
   const leaveScreen = () => {
     if (!raw) return;
-    process.stdin.setRawMode(false);
+    restoreTerminalInput(process.stdin);
     process.stdout.write("\x1b[?25h\x1b[?1049l");
     raw = false;
   };
@@ -115,7 +122,7 @@ async function interactive(root) {
       }
       model.fingerprint = fingerprint;
       model.status = status;
-      model.metadata = metadata;
+      model.metadata = { ...metadata, return_to_fleet: options.returnToFleet };
       model.stale = false;
       if (model.message === "Loading current project state...") model.message = "Ready.";
       if (
@@ -438,6 +445,11 @@ function isMain() {
 function fatal(error) {
   process.stderr.write(`OpenCode Control Plane: ${safeText(error?.message ?? error, 1000)}\n`);
   process.exitCode = 1;
+}
+
+export function restoreTerminalInput(input) {
+  input.setRawMode(false);
+  input.pause();
 }
 
 export { parseArgs, readMetadata, readStatus };

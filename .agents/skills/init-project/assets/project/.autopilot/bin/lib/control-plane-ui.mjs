@@ -74,7 +74,13 @@ export function actionMenu(status = {}, metadata = {}) {
     { menu_id: "upgrade", id: "upgrade", label: "Upgrade Control Plane", enabled: true, confirm: true },
     { menu_id: "stop", id: "stop", label: "Stop safely", enabled: live, confirm: true },
     { menu_id: "refresh", id: "refresh", label: "Refresh now", enabled: true, confirm: false },
-    { menu_id: "quit", id: "quit", label: "Close dashboard only", enabled: true, confirm: false },
+    {
+      menu_id: "quit",
+      id: "quit",
+      label: metadata.return_to_fleet ? "Back to main dashboard" : "Close dashboard only",
+      enabled: true,
+      confirm: false,
+    },
   ];
 }
 
@@ -158,7 +164,9 @@ export function renderDashboard({ status = {}, metadata = {}, activity = [], mes
   if (confirm) {
     output.push(line, fit(safeText(confirm, 1000), usable), "Press Y to continue or N to cancel.");
   }
-  output.push(line, "Closing this dashboard does not stop the worker.");
+  output.push(line, metadata.return_to_fleet
+    ? "Returning to the main dashboard does not stop the worker."
+    : "Closing this dashboard does not stop the worker.");
   return output.join("\n");
 }
 

@@ -233,7 +233,11 @@ async function interactive(home, initialInstallation) {
       await assertPrivateFile(dashboard, 4 * 1024 * 1024);
       leaveScreen();
       try {
-        const result = await runInherited(process.execPath, [dashboard, "--root", root], { cwd: root });
+        const result = await runInherited(
+          process.execPath,
+          [dashboard, "--root", root],
+          { cwd: root, env: projectDashboardEnvironment() },
+        );
         if (result.code !== 0) throw new Error(`Project dashboard exited with code ${result.code ?? "unknown"}`);
       } finally {
         enterScreen();
@@ -556,12 +560,16 @@ function runCaptured(command, args, { cwd, timeoutMs, env = process.env }) {
   });
 }
 
-function runInherited(command, args, { cwd }) {
+function runInherited(command, args, { cwd, env = process.env }) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, env: process.env, shell: false, windowsHide: false, stdio: "inherit" });
+    const child = spawn(command, args, { cwd, env, shell: false, windowsHide: false, stdio: "inherit" });
     child.once("error", reject);
     child.once("close", (code, signal) => resolve({ code, signal }));
   });
+}
+
+export function projectDashboardEnvironment(env = process.env) {
+  return { ...env, OPENCODE_CONTROL_PLANE_PARENT_DASHBOARD: "1" };
 }
 
 function gitEnvironment(source) {
