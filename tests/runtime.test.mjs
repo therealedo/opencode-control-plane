@@ -1587,6 +1587,86 @@ test("a persisted attempt is never replayed beyond the hard task limit", async (
   await assert.rejects(access(path.join(root, ".autopilot", "runtime", "fake-invocations.json")))
 })
 
+test("an interrupted empty attempt resumes with the implementation worker", async (t) => {
+  const root = await createScaffold(t, { ready: true, mode: "success" })
+  const stateFile = path.join(root, ".autopilot", "state.json")
+  const crash = await runAutopilot(root, "start", {
+    ...process.env,
+    NODE_ENV: "test",
+    AUTOPILOT_TEST_CRASH_POINT: "after_attempt_record",
+  })
+  assert.equal(crash.code, 91, crash.stderr || crash.stdout)
+  const interrupted = await readJson(stateFile)
+  assert.equal(interrupted.attempt, 1)
+  assert.equal(interrupted.last_failure_evidence, null)
+
+  const resumed = await runAutopilot(root)
+  assert.equal(resumed.code, 0, resumed.stderr || resumed.stdout)
+  const completed = await readJson(stateFile)
+  const invocations = await readJson(path.join(root, ".autopilot", "runtime", "fake-invocations.json"))
+  assert.equal(completed.status, "complete")
+  assert.deepEqual(invocations.map((item) => [item.stage, item.attempt]), [
+    ["execute", 2],
+    ["review", 2],
+  ])
+})
+
+test("explicit resume refunds a legacy evidence-less empty repair", async (t) => {
+  const root = await createScaffold(t, { ready: true, mode: "success" })
+  const stateFile = path.join(root, ".autopilot", "state.json")
+  const queueFile = path.join(root, ".project", "plan", "queue.json")
+  const runtime = path.join(root, ".autopilot", "runtime")
+  const baseline = await git(root, ["rev-parse", "HEAD"])
+  const state = await readJson(stateFile)
+  const queue = await readJson(queueFile)
+  Object.assign(state, {
+    run_id: "legacy-evidence-less-repair",
+    status: "human_required",
+    phase: "blocked",
+    pid: null,
+    started_at: new Date().toISOString(),
+    active_task: "M001",
+    attempt: 2,
+    baseline_head: baseline,
+    last_failure_fingerprint: null,
+    last_failure_evidence: null,
+    blocker: {
+      kind: "insufficient_evidence",
+      message: "The recovery packet contains no actionable failure fingerprint.",
+      required_action: "Provide failure evidence.",
+      resume_condition: "Actionable evidence is available.",
+    },
+  })
+  queue.project_status = "blocked"
+  queue.tasks.M001.status = "blocked"
+  await writeJson(stateFile, state)
+  await writeJson(queueFile, queue)
+  await writeJson(path.join(runtime, "candidate.json"), {
+    schema_version: 1,
+    task_id: "M001",
+    attempt: 2,
+    status: "blocked",
+    summary: "No failure evidence was supplied.",
+    environment_variables: [],
+    blocker: {
+      kind: "insufficient_evidence",
+      message: "The recovery packet contains no actionable failure fingerprint.",
+      required_action: "Provide failure evidence.",
+      resume_condition: "Actionable evidence is available.",
+    },
+  })
+
+  const resumed = await runAutopilot(root, "resume")
+  assert.equal(resumed.code, 0, resumed.stderr || resumed.stdout)
+  const completed = await readJson(stateFile)
+  const invocations = await readJson(path.join(runtime, "fake-invocations.json"))
+  assert.equal(completed.status, "complete", JSON.stringify({ completed, resumed }, null, 2))
+  assert.deepEqual(invocations.map((item) => [item.stage, item.attempt]), [
+    ["execute", 2],
+    ["review", 2],
+  ])
+})
+
 test("attempt and no-progress limits stop repeated failing work", async (t) => {
   for (const scenario of [
     { name: "attempt", attemptLimit: 2, maxNoProgress: 20 },

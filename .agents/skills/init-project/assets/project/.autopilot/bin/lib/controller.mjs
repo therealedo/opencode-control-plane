@@ -882,6 +882,7 @@ export class Controller {
       this.queue.project_status === "complete" &&
       queueCompletionCommitted
     ) return false;
+    await this.recoverEvidenceLessBlockedAttempt();
     let approvedHighRiskBaseline = null;
     if (
       this.resumeRequested &&
@@ -939,6 +940,49 @@ export class Controller {
       this.state,
       "Controller acquired the exclusive lock.",
     ));
+    return true;
+  }
+
+  async recoverEvidenceLessBlockedAttempt() {
+    if (
+      !this.resumeRequested ||
+      this.state.status !== "human_required" ||
+      this.state.phase !== "blocked" ||
+      this.state.blocker?.kind !== "insufficient_evidence" ||
+      this.state.last_failure_fingerprint !== null ||
+      this.state.last_failure_evidence !== null
+    ) return false;
+
+    const taskId = this.state.active_task;
+    const attempt = Number(this.state.attempt ?? 0);
+    const baseline = this.state.baseline_head;
+    if (!taskId || !this.queue.tasks[taskId] || attempt <= 1 || !baseline) return false;
+
+    let candidate;
+    try {
+      candidate = (await readCandidateDocument(this.project)).value;
+    } catch {
+      return false;
+    }
+    if (
+      candidate?.task_id !== taskId ||
+      candidate?.attempt !== attempt ||
+      candidate?.status !== "blocked" ||
+      candidate?.blocker?.kind !== "insufficient_evidence"
+    ) return false;
+
+    const applicationFiles = await taskChangedFiles(this.project, baseline);
+    if (applicationFiles.length > 0) return false;
+
+    // v1.6.1 could dispatch an evidence-less repair after an interrupted empty
+    // execution. That repair could only report insufficient evidence, consuming
+    // a second semantic attempt without touching application files. Refund only
+    // that provably empty repair; the interrupted execution remains consumed.
+    this.state = await writeState(this.project, this.state, {
+      attempt: attempt - 1,
+      phase: "recovering",
+      blocker: null,
+    });
     return true;
   }
 
@@ -1906,7 +1950,7 @@ export class Controller {
     }
 
     let evidence = recovering && Number(this.state.attempt ?? 0) > 0
-      ? this.state.last_failure_evidence ?? { recovery: "Resuming preserved Git diff from a stale controller session." }
+      ? this.state.last_failure_evidence
       : null;
     const attemptLimit = Math.min(task.attempt_limit, this.project.config.budgets.max_attempts_per_task);
     while (true) {
@@ -1931,7 +1975,7 @@ export class Controller {
         return false;
       }
       const attempt = Number(this.state.attempt ?? 0) + 1;
-      const executionPhase = attempt === 1 ? "execute" : "repair";
+      const executionPhase = attempt === 1 || evidence === null ? "execute" : "repair";
       let packet;
       let packetSecrets = [];
       try {

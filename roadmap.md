@@ -38,9 +38,9 @@ The system should retain three clearly separated layers:
 
 Blueprint and migration history belong to the cold planning path. They must not be repeatedly loaded into the autonomous execution path.
 
-## Current baseline: v1.6.1
+## Current baseline: v1.6.2
 
-Version 1.6.1 provides:
+Version 1.6.2 provides:
 
 - modular, evolving blueprints;
 - deterministic scaffolding and upgrades;
@@ -69,6 +69,8 @@ Version 1.6.1 provides:
 - backwards-compatible acceptance of the legacy `changed_files` contract field during project upgrades;
 - strict recovery of provider usage from controller state when a phase fails before creating a task receipt;
 - matching 4 MiB evaluator/worker output ceilings, Windows long-path Git isolation, and bounded calibration subsets.
+- evidence-aware interruption recovery that re-enters implementation when no repair fingerprint exists;
+- a narrowly guarded v1.6.1 recovery that refunds only an evidence-less repair proven to have changed no application files.
 
 The fixed-context measurement and simulated evaluation remain regression guards, not proof of end-to-end token savings or unchanged implementation quality. Controlled live trials across models are the next step before further prompt compression or reduced-review policy.
 
