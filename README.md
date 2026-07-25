@@ -117,6 +117,7 @@ Local workers are policy-bounded, not operating-system sandboxed. OpenCode and p
 - A deterministic compiler sends only the task's selected project facts, paths, tools, and test credentials while preserving code blocks exactly.
 - Workers inspect narrowly, reuse existing/native capabilities before adding code, and reviewers reject needless files, dependencies, configuration, and abstractions without relaxing quality or safety.
 - Tests, Git transitions, status polling, upgrades, and context handoffs are deterministic and token-free.
+- The controller derives the authoritative changed-file list once from validated Git evidence; workers do not spend output tokens describing facts the controller already knows.
 - Per-task Conventional Commit prefixes live in controller configuration, outside worker prompts.
 - Tool results and worker contracts are paginated and bounded; full evidence stays in artifacts instead of prompts.
 - Blueprints and receipts preserve durable memory without growing every prompt, while receipts record actual model usage for release comparisons.

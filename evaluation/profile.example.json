@@ -19,7 +19,7 @@
   "repetitions": 1,
   "attempt_limit": 3,
   "timeout_seconds": 1800,
-  "max_output_bytes": 16777216,
+  "max_output_bytes": 4194304,
   "keep_test_projects": false,
   "require_complete_usage": true,
   "budgets": {

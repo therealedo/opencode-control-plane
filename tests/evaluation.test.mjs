@@ -35,6 +35,35 @@ test("plan and no-argument CLI are read-only", async () => {
   assert.match(child.stdout, /No command creates or opens an existing project/)
 })
 
+test("a profile can select one bounded case and strategy for calibration", async (context) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "ocp-evaluation-subset-"))
+  const parent = path.join(temporary, "owned")
+  context.after(() => rm(temporary, { recursive: true, force: true }))
+  const profile = JSON.parse(await readFile(profileFile, "utf8"))
+  profile.profile_id = "control-plane-calibration"
+  profile.cases = ["greenfield"]
+  profile.strategies = ["control_plane"]
+  profile.budgets.max_trials = 1
+
+  const plan = await planEvaluation({ profile })
+  assert.equal(plan.trial_count, 1)
+  assert.deepEqual(plan.cases.map((item) => item.id), ["greenfield"])
+  assert.deepEqual(plan.strategies, ["control_plane"])
+
+  const oversized = structuredClone(profile)
+  oversized.max_output_bytes = 4 * 1024 * 1024 + 1
+  await assert.rejects(
+    planEvaluation({ profile: oversized }),
+    (error) => error instanceof EvaluationError && error.code === "PROFILE_INVALID",
+  )
+
+  const report = await startEvaluation({ mode: "simulate", profile, parentDirectory: parent })
+  assert.equal(report.status, "completed")
+  assert.equal(report.completed_trial_count, 1)
+  assert.equal(report.accepted_trial_count, 1)
+  assert.equal(report.trials[0].trial_id, "r01-greenfield-control-plane")
+})
+
 test("simulation runs the 7 x 3 matrix in marked disposable workspaces", async (context) => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), "ocp-evaluation-test-"))
   const parent = path.join(temporary, "owned")

@@ -33,6 +33,7 @@ const MAX_AUTH_BYTES = 1024 * 1024;
 const MAX_TASK_BYTES = 256 * 1024;
 const MAX_COMMAND_ARGUMENT_BYTES = 4096;
 const MAX_PROCESS_OUTPUT_BYTES = 64 * 1024 * 1024;
+const MAX_COMPARABLE_OUTPUT_BYTES = 4 * 1024 * 1024;
 const MAX_ERROR_BYTES = 2000;
 const RUNTIME_MARKER = ".ocp-evaluation-runtime.json";
 const RUNTIME_OWNER = "opencode-control-plane-evaluation";
@@ -219,7 +220,7 @@ function normalizeProfile(profile) {
       minimum: 1, maximum: 7200, label: "profile.timeout_seconds",
     }) * 1000,
     maxOutputBytes: numberOption(profile.max_output_bytes, 2 * 1024 * 1024, {
-      minimum: 4096, maximum: MAX_PROCESS_OUTPUT_BYTES, label: "profile.max_output_bytes",
+      minimum: 4096, maximum: MAX_COMPARABLE_OUTPUT_BYTES, label: "profile.max_output_bytes",
     }),
   };
 }
@@ -714,18 +715,28 @@ function publicAttempt(attempt, number) {
   };
 }
 
-function outcome(input, { attempts, gate, telemetry, elapsedMs, diagnostics = [], interruption = null }) {
+function outcome(input, {
+  attempts,
+  gate,
+  telemetry,
+  elapsedMs,
+  diagnostics = [],
+  interruption = null,
+  requiredEvidenceMissing = false,
+}) {
   const processFailed = attempts.some((attempt) =>
     attempt.process.code !== 0 || attempt.process.timed_out || attempt.process.output_truncated
   );
-  const accepted = gate?.ok === true && !processFailed;
+  const accepted = gate?.ok === true && !processFailed && !requiredEvidenceMissing;
   const comparable = telemetry?.comparable === true;
   return {
     schema_version: 1,
     strategy: input.strategy,
     case_id: input.caseRecord.id,
     repetition: input.repetition,
-    status: processFailed ? "failed" : comparable ? (accepted ? "accepted" : "rejected") : "non_comparable",
+    status: processFailed || requiredEvidenceMissing
+      ? "failed"
+      : comparable ? (accepted ? "accepted" : "rejected") : "non_comparable",
     comparable,
     accepted,
     attempt_count: attempts.length,
@@ -999,22 +1010,31 @@ async function scaffoldControlPlane(input) {
     repetition: input.repetition,
   });
 
-  const gitIsolationRoot = path.join(input.candidate, ".autopilot", "runtime", "evaluation-git");
-  const hooks = path.join(gitIsolationRoot, "hooks");
-  const templates = path.join(gitIsolationRoot, "templates");
-  const globalConfig = path.join(gitIsolationRoot, "global-config");
-  await Promise.all([mkdir(hooks, { recursive: true }), mkdir(templates, { recursive: true })]);
-  await writeFile(globalConfig, "", { encoding: "utf8", mode: 0o600, flag: "wx" });
-  input.gitIsolation = { root: gitIsolationRoot, hooks, templates, globalConfig };
+  // Git for Windows still applies legacy path limits to some template paths.
+  // Keep Git-only configuration in a short, marker-owned temporary root rather
+  // than nesting it beneath the already bounded evaluation candidate path.
+  const gitOwned = await createOwnedRuntime(os.tmpdir(), "ocp-eval-git-", "control-plane-git");
+  try {
+    const hooks = path.join(gitOwned.root, "hooks");
+    const templates = path.join(gitOwned.root, "templates");
+    const globalConfig = path.join(gitOwned.root, "global-config");
+    await Promise.all([mkdir(hooks, { recursive: true }), mkdir(templates, { recursive: true })]);
+    await writeFile(globalConfig, "", { encoding: "utf8", mode: 0o600, flag: "wx" });
+    input.gitIsolation = { root: gitOwned.root, hooks, templates, globalConfig };
 
-  await runGit(input, ["init", `--template=${templates}`]);
-  await runGit(input, ["config", "user.name", "OpenCode Control Plane Evaluation"]);
-  await runGit(input, ["config", "user.email", "evaluation@example.invalid"]);
-  await runGit(input, ["config", "core.hooksPath", hooks]);
-  await runGit(input, ["config", "commit.gpgSign", "false"]);
-  await runGit(input, ["config", "tag.gpgSign", "false"]);
-  await runGit(input, ["add", "-A"]);
-  await runGit(input, ["commit", "-m", "evaluation: disposable baseline"]);
+    await runGit(input, ["init", `--template=${templates}`]);
+    await runGit(input, ["config", "user.name", "OpenCode Control Plane Evaluation"]);
+    await runGit(input, ["config", "user.email", "evaluation@example.invalid"]);
+    await runGit(input, ["config", "core.hooksPath", hooks]);
+    await runGit(input, ["config", "core.longpaths", "true"]);
+    await runGit(input, ["config", "commit.gpgSign", "false"]);
+    await runGit(input, ["config", "tag.gpgSign", "false"]);
+    await runGit(input, ["add", "-A"]);
+    await runGit(input, ["commit", "-m", "evaluation: disposable baseline"]);
+  } finally {
+    delete input.gitIsolation;
+    await removeOwnedRuntime(gitOwned);
+  }
 }
 
 function controlPlaneGateSource(input) {
@@ -1034,6 +1054,7 @@ async function runGit(input, arguments_) {
   const result = await boundedProcess([
     "git",
     "-c", `core.hooksPath=${input.gitIsolation.hooks}`,
+    "-c", "core.longpaths=true",
     "-c", "commit.gpgSign=false",
     "-c", "tag.gpgSign=false",
     ...arguments_,
@@ -1084,8 +1105,8 @@ async function prepareControllerEnvironment(input, root) {
   };
 }
 
-function receiptTelemetry(receipt) {
-  const entries = Object.entries(receipt?.tool_usage ?? {});
+function controllerTelemetry(toolUsage) {
+  const entries = Object.entries(plainObject(toolUsage) ? toolUsage : {});
   const sessions = {};
   const usages = [];
   for (const [phase, entry] of entries) {
@@ -1115,9 +1136,26 @@ function receiptTelemetry(receipt) {
     usage: Object.fromEntries(Object.entries(aggregate).filter(([key]) => key !== "status")),
     sessions,
     diagnostics: status === "complete" ? [] : [{
-      code: entries.length === 0 ? "MISSING_RECEIPT_USAGE" : "INCOMPLETE_RECEIPT_USAGE",
-      message: "Control Plane receipt lacks complete provider-reported usage for every phase.",
+      code: entries.length === 0 ? "MISSING_CONTROLLER_USAGE" : "INCOMPLETE_CONTROLLER_USAGE",
+      message: "Control Plane evidence lacks complete provider-reported usage for every recorded phase.",
     }],
+  };
+}
+
+function controllerProcessFailure(input, processResult) {
+  if (processResult.code === 0 && !processResult.timed_out && !processResult.output_truncated) return null;
+  let code = processResult.timed_out ? "CONTROL_PLANE_TIMEOUT" : "CONTROL_PLANE_FAILED";
+  let detail = "";
+  try {
+    const parsed = JSON.parse(processResult.stderr);
+    if (typeof parsed?.code === "string" && /^[A-Z][A-Z0-9_]{0,127}$/.test(parsed.code)) code = parsed.code;
+    if (typeof parsed?.error === "string") {
+      detail = `: ${boundedText(parsed.error, [[input.candidate, "<candidate>"], [input.runRoot, "<run-root>"]])}`;
+    }
+  } catch {}
+  return {
+    code,
+    message: `Disposable Control Plane controller failed with ${code}${detail}`,
   };
 }
 
@@ -1174,19 +1212,6 @@ async function runControlPlane(input) {
     await rm(runtimeParent, { recursive: false }).catch(() => {});
   }
 
-  if (finalProcess.code !== 0 || finalProcess.timed_out || finalProcess.output_truncated) {
-    let code = finalProcess.timed_out ? "CONTROL_PLANE_TIMEOUT" : "CONTROL_PLANE_FAILED";
-    let detail = "";
-    try {
-      const parsed = JSON.parse(finalProcess.stderr);
-      if (typeof parsed?.code === "string" && /^[A-Z][A-Z0-9_]{0,127}$/.test(parsed.code)) code = parsed.code;
-      if (typeof parsed?.error === "string") {
-        detail = `: ${boundedText(parsed.error, [[input.candidate, "<candidate>"], [input.runRoot, "<run-root>"]])}`;
-      }
-    } catch {}
-    throw new LiveEvaluationError(`disposable Control Plane controller failed with ${code}${detail}`, code);
-  }
-
   const receiptFile = path.join(input.candidate, ".project", "receipts", "M001.json");
   const finalReceiptFile = path.join(input.candidate, ".project", "receipts", "__project-final.json");
   const stateFile = path.join(input.candidate, ".autopilot", "state.json");
@@ -1214,16 +1239,12 @@ async function runControlPlane(input) {
     : "MISSING_CONTROL_PLANE_RECEIPT");
   const missingReceiptMessage = controllerState?.blocker?.message
     ? boundedText(controllerState.blocker.message, [[input.candidate, "<candidate>"], [input.runRoot, "<run-root>"]])
-    : "Control Plane did not produce a bounded task receipt, so the trial is non-comparable.";
-  if (!receipt) {
-    throw new LiveEvaluationError(missingReceiptMessage, missingReceiptCode);
-  }
-  const telemetry = receipt ? receiptTelemetry(receipt) : invalidTelemetry(
-    missingReceiptCode,
-    missingReceiptMessage,
-  );
+    : "Control Plane did not produce a bounded task receipt, so the trial cannot be accepted.";
+  const processFailure = controllerProcessFailure(input, finalProcess);
+  const toolUsage = receipt?.tool_usage ?? controllerState?.task_tool_usage;
+  const telemetry = controllerTelemetry(toolUsage);
   const gate = receipt ? await runHeldOutGate(input) : null;
-  const attemptNumbers = Object.keys(receipt?.tool_usage ?? {})
+  const attemptNumbers = Object.keys(plainObject(toolUsage) ? toolUsage : {})
     .map((key) => Number(/:a(\d+)$/.exec(key)?.[1] ?? 0))
     .filter((value) => value > 0);
   const attempts = [{
@@ -1240,9 +1261,15 @@ async function runControlPlane(input) {
       expected_sessions: telemetry.expected_sessions,
     },
   }];
+  const diagnostics = [
+    ...(processFailure ? [processFailure] : []),
+    ...(!receipt ? [{ code: missingReceiptCode, message: missingReceiptMessage }] : []),
+    ...telemetry.diagnostics,
+  ];
   const result = outcome(input, {
     attempts, gate, telemetry, elapsedMs: Date.now() - started, interruption,
-    diagnostics: receipt ? [] : telemetry.diagnostics,
+    diagnostics,
+    requiredEvidenceMissing: !receipt,
   });
   result.attempt_count = attemptNumbers.length ? Math.max(...attemptNumbers) : 0;
   result.receipt = receipt ? {

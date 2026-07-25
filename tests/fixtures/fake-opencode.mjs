@@ -164,16 +164,18 @@ if (stage === "review") {
   const destination = path.join(root, ...changedFile.split("/"))
   await mkdir(path.dirname(destination), { recursive: true })
   await writeFile(destination, contents, "utf8")
-  await writeJson(path.join(runtime, "candidate.json"), {
+  const candidate = {
     schema_version: 1,
     task_id: taskId,
     attempt,
     status: "complete",
     summary: `Fake ${stage} session produced the bounded candidate.`,
-    changed_files: [changedFile],
     environment_variables: [],
     blocker: null,
-  })
+  }
+  if (config.mode === "stale-candidate-diff") candidate.changed_files = []
+  if (config.mode === "path-violation") candidate.changed_files = ["src/result.txt"]
+  await writeJson(path.join(runtime, "candidate.json"), candidate)
 }
 
 if (config.session_id_mode === "nested") {

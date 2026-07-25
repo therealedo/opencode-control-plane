@@ -212,6 +212,22 @@ test("controller completes task and project through fresh execute and review ses
   assert.equal(restartedState.status, "complete")
 })
 
+test("controller canonicalizes stale candidate file claims from its validated Git diff", async (t) => {
+  const root = await createScaffold(t, { ready: true, mode: "stale-candidate-diff" })
+  const result = await runAutopilot(root)
+
+  assert.equal(result.code, 0, result.stderr || result.stdout)
+  const state = await readJson(path.join(root, ".autopilot", "state.json"))
+  const receipt = await readJson(path.join(root, ".project", "receipts", "M001.json"))
+  const invocations = await readJson(
+    path.join(root, ".autopilot", "runtime", "fake-invocations.json"),
+  )
+  assert.equal(state.status, "complete", JSON.stringify({ state, result }, null, 2))
+  assert.deepEqual(receipt.changed_files, ["src/result.txt"])
+  const reviewPrompt = invocations.find((item) => item.stage === "review").argv.at(-1)
+  assert.match(reviewPrompt, /\+\+\+ b\/src\/result\.txt/)
+})
+
 test("controller uses blueprint-compiled Conventional Commit prefixes without model classification", async (t) => {
   const root = await createScaffold(t, { ready: true, mode: "success" })
   const configFile = path.join(root, ".autopilot", "config.json")

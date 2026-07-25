@@ -9,16 +9,23 @@ import { preflightLiveEvaluation, runLiveTrial } from "../scripts/lib/evaluation
 const testsRoot = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(testsRoot, "..");
 
-async function fixture(t, caseId, { emitUsage = true } = {}) {
+async function fixture(t, caseId, {
+  emitUsage = true,
+  candidatePrefix = "",
+  candidateStatus = "complete",
+} = {}) {
   const runRoot = await mkdtemp(path.join(os.tmpdir(), "ocp-live-evaluation-"));
   t.after(async () => rm(runRoot, { recursive: true, force: true }));
   const workspace = path.join(runRoot, "workspace");
-  const candidate = path.join(workspace, `${caseId}-candidate`);
+  const candidate = path.join(workspace, `${candidatePrefix}${caseId}-candidate`);
   const caseDirectory = path.join(repositoryRoot, "evaluation", "corpus", caseId);
   await mkdir(workspace, { recursive: true });
   await cp(path.join(caseDirectory, "seed"), candidate, { recursive: true });
   const fake = path.join(runRoot, "fake-opencode.mjs");
-  await writeFile(fake, fakeSource(path.join(caseDirectory, "solution"), emitUsage), "utf8");
+  await writeFile(fake, fakeSource(path.join(caseDirectory, "solution"), {
+    emitUsage,
+    candidateStatus,
+  }), "utf8");
   const caseRecord = JSON.parse(await readFile(path.join(caseDirectory, "case.json"), "utf8"));
   const taskText = await readFile(path.join(caseDirectory, caseRecord.task_file), "utf8");
   const profile = {
@@ -36,8 +43,22 @@ async function fixture(t, caseId, { emitUsage = true } = {}) {
   return { repositoryRoot, runRoot, workspace, candidate, caseDirectory, caseRecord, taskText, profile };
 }
 
-function fakeSource(solution, emitUsage) {
+function baseFakeSource(solution, { emitUsage }) {
   return `import { cp, mkdir, readFile, readdir, writeFile } from "node:fs/promises";\nimport path from "node:path";\nconst argv=process.argv.slice(2);\nif(argv.includes("--version")){process.stdout.write("fake-opencode 1.0.0\\n");process.exit(0)}\nif(argv.includes("--help")){process.stdout.write("Usage: opencode run [message]\\n");process.exit(0)}\nconst index=argv.indexOf("--dir");\nconst launch=index>=0?path.resolve(argv[index+1]):process.cwd();\nlet root=launch;\ntry{const policy=JSON.parse(Buffer.from(process.env.AUTOPILOT_TOOL_POLICY??"","base64").toString("utf8"));if(path.isAbsolute(policy.root??""))root=path.resolve(policy.root)}catch{}\nconst prompt=argv.at(-1)??"";\nconst stage=/^Stage:\\s*(\\S+)/m.exec(prompt)?.[1]??"execute";\nconst task=/^Task:\\s*(\\S+)/m.exec(prompt)?.[1]??"M001";\nconst attempt=Number(/^Attempt:\\s*(\\d+)/m.exec(prompt)?.[1]??1);\nconst runtime=path.join(root,".autopilot","runtime");\nawait mkdir(runtime,{recursive:true});\nasync function files(directory,prefix=""){const output=[];for(const entry of await readdir(directory,{withFileTypes:true})){const relative=prefix?prefix+"/"+entry.name:entry.name;const location=path.join(directory,entry.name);if(entry.isDirectory())output.push(...await files(location,relative));else if(entry.isFile())output.push(relative)}return output}\nif(stage==="review"){await writeFile(path.join(runtime,"review.json"),JSON.stringify({schema_version:1,task_id:task,status:"approved",summary:"Independent fake review approved bounded evidence.",findings:[]},null,2)+"\\n","utf8")}else{const changed=await files(${JSON.stringify(solution)});await cp(${JSON.stringify(solution)},root,{recursive:true,force:true});await writeFile(path.join(runtime,"candidate.json"),JSON.stringify({schema_version:1,task_id:task,attempt,status:"complete",summary:"Fake live worker completed the bounded task.",changed_files:changed,environment_variables:[],blocker:null},null,2)+"\\n","utf8")}\nconst session="eval-"+stage+"-a"+attempt+"-p"+process.pid;\nconst timestamp=Date.now();\nprocess.stdout.write(JSON.stringify({type:"session",timestamp,sessionID:session})+"\\n");\n${emitUsage ? 'process.stdout.write(JSON.stringify({type:"step_finish",timestamp:timestamp+1,sessionID:session,part:{id:"part-"+session,messageID:"msg-"+session,sessionID:session,type:"step-finish",reason:"stop",cost:0.01,tokens:{total:19,input:10,output:5,reasoning:2,cache:{read:2,write:1}}}})+"\\n");' : ""}\n`;
+}
+
+function fakeSource(solution, options) {
+  const blocker = options.candidateStatus === "blocked" ? {
+    kind: "benchmark_boundary",
+    message: "Deliberate benchmark boundary after provider usage.",
+    required_action: "Inspect retained numeric telemetry.",
+    resume_condition: "Run a separate approved retry.",
+  } : null;
+  const candidateFields = `status:${JSON.stringify(options.candidateStatus)},summary:"Fake live worker completed the bounded task.",changed_files:changed,environment_variables:[],blocker:${JSON.stringify(blocker)}`;
+  return baseFakeSource(solution, options).replace(
+    'status:"complete",summary:"Fake live worker completed the bounded task.",changed_files:changed,environment_variables:[],blocker:null',
+    candidateFields,
+  );
 }
 
 function trial(fixtureValue, strategy, repetition = 1) {
@@ -129,6 +150,40 @@ test("Control Plane live trial scaffolds the disposable candidate, repairs once,
   assert.equal(await readFile(path.join(value.candidate, "src", "commission.mjs"), "utf8").then((text) => text.includes("commissionCents")), true);
 });
 
+test("Control Plane retains strict state telemetry when a task stops before its receipt", async (t) => {
+  for (const emitUsage of [true, false]) {
+    await t.test(emitUsage ? "complete usage" : "missing usage", async (nested) => {
+      const value = await fixture(nested, "greenfield", {
+        emitUsage,
+        candidateStatus: "blocked",
+      });
+      const result = await trial(value, "control_plane");
+      assert.equal(result.status, "failed", JSON.stringify(result, null, 2));
+      assert.equal(result.accepted, false);
+      assert.equal(result.receipt, null);
+      assert.equal(result.attempt_count, 1);
+      assert.equal(result.diagnostics[0].code, "BENCHMARK_BOUNDARY");
+      assert.equal(result.telemetry.comparable, emitUsage);
+      assert.equal(result.telemetry.usage.input_tokens, emitUsage ? 10 : null);
+      assert.equal(result.telemetry.usage.output_tokens, emitUsage ? 5 : null);
+      assert.equal(result.telemetry.usage.reasoning_tokens, emitUsage ? 2 : null);
+      assert.equal(result.telemetry.usage.cache_read_tokens, emitUsage ? 2 : null);
+      assert.equal(result.telemetry.usage.cache_write_tokens, emitUsage ? 1 : null);
+      assert.equal(result.telemetry.usage.provider_cost, emitUsage ? 0.01 : null);
+    });
+  }
+});
+
+test("Control Plane Git isolation supports evaluator-length Windows candidate paths", async (t) => {
+  const prefixLength = process.platform === "win32" ? 128 : 32;
+  const value = await fixture(t, "greenfield", { candidatePrefix: "x".repeat(prefixLength) });
+  const result = await trial(value, "control_plane");
+  assert.equal(result.status, "accepted", JSON.stringify(result, null, 2));
+  assert.equal(result.accepted, true);
+  assert.equal(result.comparable, true);
+  assert.equal(result.held_out_gate.ok, true);
+});
+
 test("Control Plane live trial resumes from its disposable crash boundary", async (t) => {
   const value = await fixture(t, "interruption-recovery");
   const result = await trial(value, "control_plane");
@@ -170,7 +225,7 @@ test("Control Plane receipt telemetry fails closed on malformed, conflicting, or
       const result = await trial(value, "control_plane");
       assert.equal(result.status, "failed", JSON.stringify(result, null, 2));
       assert.equal(result.diagnostics[0].code, scenario.code, JSON.stringify(result, null, 2));
-      assert.equal(result.receipt, undefined);
+      assert.equal(result.receipt, null);
       assert.equal(result.telemetry.comparable, false);
       assert.deepEqual(result.strategy_gates, {
         run_count: 0,

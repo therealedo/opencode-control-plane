@@ -1,6 +1,6 @@
 # Evaluation harness
 
-The v1.5 evaluator measures the complete worker lifecycle without using an existing project. It is a maintainer/research tool in this source repository; it is not installed into generated projects and adds nothing to their model context.
+The evaluation harness introduced in v1.5 measures the complete worker lifecycle without using an existing project. It is a maintainer/research tool in this source repository; it is not installed into generated projects and adds nothing to their model context.
 
 ## Safe commands
 
@@ -20,7 +20,7 @@ Both commands leave registered projects, the global registry, installation, and 
 
 ## Live comparison
 
-Copy `evaluation/profile.example.json` to the ignored `evaluation/profile.local.json`. Replace `provider/model`, select one reasoning variant or `null`, and set conservative per-dimension budgets. Then run:
+Copy `evaluation/profile.example.json` to the ignored `evaluation/profile.local.json`. Replace `provider/model`, select one reasoning variant or `null`, choose one or more bundled cases and strategies, and set conservative per-dimension budgets. The example keeps the complete 21-trial matrix; a calibration profile may select a smaller explicit subset. Then run:
 
 ```text
 node scripts/evaluate.mjs --live --profile evaluation/profile.local.json --confirm LIVE_EVALUATION_USES_PROVIDER_CREDITS
@@ -46,6 +46,8 @@ Only an exact marker-owned, link-free trial tree is removed. An unsafe tree is r
 
 Budgets cover trials, active elapsed minutes, provider-reported cost, and each reported token dimension independently. They are checked after an atomic trial result and before the next trial starts. A running trial can cross a soft limit because its final usage is unknowable in advance.
 
+The shared process-output ceiling is at most 4 MiB, matching the generated Control Plane worker contract so no strategy receives a larger output allowance.
+
 Resume accepts only the generated run ID:
 
 ```text
@@ -58,6 +60,6 @@ For a live run, repeat the same explicit confirmation. If the evaluator was inte
 
 Each run keeps `report.json`, `report.md`, state, and immutable per-trial results below its temporary run directory. Reports include the sanitized OpenCode version and hashed Control Plane source revision needed to reproduce a comparison. They contain IDs and bounded measurements, not absolute personal paths, prompts, raw model output, credentials, or environment values.
 
-Provider-reported input, cache-read, cache-write, reasoning, output, and cost remain separate because their accounting can overlap. Missing or malformed telemetry is unavailable/invalid, never zero. The evaluator also records attempts, repairs, reviews, recoveries, gate failures, false completion, unexpected files, dependency additions, elapsed time, and common acceptance. It does not estimate a Codex/ChatGPT subscription percentage.
+Provider-reported input, cache-read, cache-write, reasoning, output, and cost remain separate because their accounting can overlap. Missing or malformed telemetry is unavailable/invalid, never zero. A Control Plane phase that fails before creating a completion receipt may retain only strictly validated numeric usage from controller state; the failure remains failed and non-accepted. The evaluator never estimates usage from elapsed time, output size, or partial events. It also records attempts, repairs, reviews, recoveries, gate failures, false completion, unexpected files, dependency additions, elapsed time, and common acceptance. It does not estimate a Codex/ChatGPT subscription percentage.
 
 OpenCode documents the programmatic JSON event mode used here in its [CLI reference](https://opencode.ai/docs/cli/), and its explicit deny rules remain active under `--auto` according to the [permissions reference](https://opencode.ai/docs/permissions).

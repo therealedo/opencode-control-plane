@@ -2037,6 +2037,19 @@ export class Controller {
           ...ephemeralSecrets,
           ...consumeEphemeralPhaseSecrets(session),
         ])];
+        // Persist bounded numeric/tool telemetry as soon as the isolated model
+        // process and protected postflight finish. Later contract or secret
+        // validation failures must not erase evidence of provider usage.
+        this.state = await writeState(this.project, this.state, {
+          last_session: session.session_id,
+          session_ids: [...(this.state.session_ids ?? []), session.session_id],
+          task_tool_usage: appendBoundedTaskToolUsage(
+            this.state.task_tool_usage,
+            `${executionPhase}:a${attempt}`,
+            session.tool_usage,
+          ),
+          phase: "candidate_validation",
+        });
         candidate = await assertCleanPhaseContract(
           this.project,
           "candidate.json",
@@ -2061,22 +2074,11 @@ export class Controller {
             { code: "SECRET_SCAN_FAILED", details: immediateSecretIssues },
           );
         }
-        this.state = await writeState(this.project, this.state, {
-          last_session: session.session_id,
-          session_ids: [...(this.state.session_ids ?? []), session.session_id],
-          task_tool_usage: appendBoundedTaskToolUsage(
-            this.state.task_tool_usage,
-            `${executionPhase}:a${attempt}`,
-            session.tool_usage,
-          ),
-          phase: "candidate_validation",
-        });
         if (await this.pauseAtBoundary("Pause/stop requested after fresh execution session.")) return false;
         await this.rolloverAtBoundary();
 
         assertNoIssues(validateCandidate(candidate, taskId, attempt), "Candidate contract");
         validateChangedPaths(files, task.allowed_paths);
-        assertCandidateFiles(candidate.changed_files, files);
         await assertSafeChangedFiles(this.project, baseline, files);
         await assertModeIntentTransitions(this.project, baseline, acceptedModeSnapshot.intents, files);
         const secretIssues = await scanFilesForSecrets(this.root, files, {
@@ -2088,6 +2090,11 @@ export class Controller {
             { code: "SECRET_SCAN_FAILED", details: secretIssues },
           );
         }
+        // Git, allowed-path validation, file-type checks, and mode intents are
+        // controller-owned. Canonicalize the review contract from that evidence
+        // instead of trusting or recomputing a worker-supplied file list.
+        candidate = { ...candidate, changed_files: [...files] };
+        assertNoIssues(validateCandidate(candidate, taskId, attempt), "Canonical candidate contract");
         const diffHash = await gitDiffHash(this.project, baseline, files, {
           modeIntents: acceptedModeSnapshot.intents,
         });
@@ -2201,6 +2208,15 @@ export class Controller {
           ...ephemeralSecrets,
           ...consumeEphemeralPhaseSecrets(reviewSession),
         ];
+        this.state = await writeState(this.project, this.state, {
+          last_session: reviewSession.session_id,
+          session_ids: [...(this.state.session_ids ?? []), reviewSession.session_id],
+          task_tool_usage: appendBoundedTaskToolUsage(
+            this.state.task_tool_usage,
+            `review:a${attempt}`,
+            reviewSession.tool_usage,
+          ),
+        });
         const review = await assertCleanPhaseContract(
           this.project,
           "review.json",
@@ -2216,15 +2232,6 @@ export class Controller {
             { code: "SECRET_SCAN_FAILED", details: immediateReviewSecretIssues },
           );
         }
-        this.state = await writeState(this.project, this.state, {
-          last_session: reviewSession.session_id,
-          session_ids: [...(this.state.session_ids ?? []), reviewSession.session_id],
-          task_tool_usage: appendBoundedTaskToolUsage(
-            this.state.task_tool_usage,
-            `review:a${attempt}`,
-            reviewSession.tool_usage,
-          ),
-        });
         if (await this.pauseAtBoundary("Pause/stop requested after independent review.")) return false;
         await this.rolloverAtBoundary();
         assertNoIssues(validateReview(review, taskId), "Review contract");

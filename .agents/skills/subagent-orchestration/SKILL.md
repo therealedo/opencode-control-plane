@@ -9,7 +9,7 @@ description: Delegate a bounded implementation, investigation, or review task to
 2. Respect both context caps in `.autopilot/config.json` and `.project/manifest.json`. Do not send the whole repository, archive, unrelated architecture, or raw history.
 3. Treat every subagent as operating in the same worktree. Inspect existing changes first; run parallel writers only on disjoint reserved paths. Otherwise serialize them. Do not plan a fictional merge or code-extraction step.
 4. Keep phases in separate fresh invocations: `autopilot-worker` or `autopilot-recovery` may write only `.autopilot/runtime/candidate.json`; `autopilot-reviewer` may write only `.autopilot/runtime/review.json`.
-5. Require workers to preserve unrelated edits; candidate `changed_files` must exactly match the actual Git task diff. No subagent may edit other control, queue, gate, debt, credential, or receipt files.
+5. Require workers to preserve unrelated edits; the controller derives the exact task diff from Git. No subagent may edit other control, queue, gate, debt, credential, or receipt files.
 6. The external controller validates the contract, runs fixed gates, schedules the next fresh phase, writes receipts, and alone advances state.
 
 The controller keeps raw logs in bounded `.autopilot/artifacts/`; subagents return only the evidence needed for controller decisions.

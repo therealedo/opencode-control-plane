@@ -38,9 +38,9 @@ The system should retain three clearly separated layers:
 
 Blueprint and migration history belong to the cold planning path. They must not be repeatedly loaded into the autonomous execution path.
 
-## Current baseline: v1.6.0
+## Current baseline: v1.6.1
 
-Version 1.6.0 provides:
+Version 1.6.1 provides:
 
 - modular, evolving blueprints;
 - deterministic scaffolding and upgrades;
@@ -65,21 +65,37 @@ Version 1.6.0 provides:
 - zero-token commit selection from protected configuration rather than worker inference;
 - unchanged support for Blueprint schema 5 and fixed-prefix initialized projects;
 - a hash-verified, blueprint-preserving refresh that lets an older active interview finalize without restarting.
+- a single authoritative, policy-validated Git changed-file record instead of a redundant worker-contract snapshot;
+- backwards-compatible acceptance of the legacy `changed_files` contract field during project upgrades;
+- strict recovery of provider usage from controller state when a phase fails before creating a task receipt;
+- matching 4 MiB evaluator/worker output ceilings, Windows long-path Git isolation, and bounded calibration subsets.
 
 The fixed-context measurement and simulated evaluation remain regression guards, not proof of end-to-end token savings or unchanged implementation quality. Controlled live trials across models are the next step before further prompt compression or reduced-review policy.
+
+### First controlled live calibration
+
+On July 24, 2026, the greenfield case completed once per strategy with OpenCode 1.18.4, `openai/gpt-5.6-sol`, and the `max` reasoning variant. All three strategies passed the same held-out gate.
+
+| Strategy | Accepted | Input | Output | Reasoning | Cache read | Elapsed |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Direct OpenCode | Yes | 7,171 | 625 | 1,449 | 5,632 | 62.5 s |
+| Minimal fresh loop | Yes | 5,982 | 591 | 1,185 | 5,632 | 52.4 s |
+| Control Plane v1.6.1 | Yes | 14,028 | 634 | 1,793 | 9,216 | 149.4 s |
+
+Control Plane completed in one implementation attempt with zero repairs, one independent review, four successful strategy gates, no unexpected files, and no dependency additions. For this small, low-risk task, that extra assurance cost more input and elapsed time than either simpler strategy; this calibration does **not** show total-token savings. One repetition is directional evidence, not a statistically reliable benchmark. The next efficiency work should target phase input and risk-proportional review without weakening deterministic gates, followed by repeated trials across the full corpus before changing default policy.
 
 ## Milestone 1: Evidence and truthful boundaries
 
 **Goal:** establish whether Control Plane improves total efficiency without reducing quality.
 
-**Status:** evaluation infrastructure shipped in v1.5.0; comparative live baselines are pending. Installation, upgrade, and normal project work never start paid evaluation trials.
+**Status:** evaluation infrastructure shipped in v1.5.0; the first three-strategy greenfield calibration is complete, while repeated and cross-scenario live baselines remain pending. Installation, upgrade, and normal project work never start paid evaluation trials.
 
 Planned outcomes:
 
 - Repeatable corpus for greenfield work, feature changes, bug repair, integration changes, blueprint migration, interruption recovery, and failed verification: **shipped**.
 - Direct OpenCode, minimal fresh-session loop, and Control Plane trial modes on equivalent disposable tasks: **shipped**.
-- Strict input, cache-read, cache-write, reasoning, output, and provider-cost collection—not prompt bytes alone: **shipped; live data pending**.
-- Retries, repairs, elapsed time, unnecessary files/dependencies, false completion, gate results, and final common acceptance: **shipped; live data pending**.
+- Strict input, cache-read, cache-write, reasoning, output, and provider-cost collection—not prompt bytes alone: **shipped; first live calibration recorded**.
+- Retries, repairs, elapsed time, unnecessary files/dependencies, false completion, gate results, and final common acceptance: **shipped; first live calibration recorded**.
 - Model/provider/profile identity separated from framework-owned measurements: **shipped**.
 - Accurate application-level **policy boundary** language without implying operating-system isolation: **shipped**.
 - Existing independent reviewer and deterministic safety gates retained while gathering the baseline: **shipped**.

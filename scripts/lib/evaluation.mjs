@@ -917,8 +917,8 @@ function publicPlan(profile, corpus, trials) {
     },
     corpus_sha256: corpus.sha256,
     trial_count: trials.length,
-    cases: DEFAULT_CASES.map((id) => ({ id, title: corpus.cases.get(id).title })),
-    strategies: [...DEFAULT_STRATEGIES],
+    cases: profile.cases.map((id) => ({ id, title: corpus.cases.get(id).title })),
+    strategies: [...profile.strategies],
     budgets: profile.budgets,
     note: "Planning does not create workspaces or invoke OpenCode.",
   }
@@ -927,8 +927,8 @@ function publicPlan(profile, corpus, trials) {
 function buildTrials(profile, cases) {
   const trials = []
   for (let repetition = 1; repetition <= profile.repetitions; repetition += 1) {
-    for (const caseId of DEFAULT_CASES) {
-      for (const strategy of DEFAULT_STRATEGIES) {
+    for (const caseId of profile.cases) {
+      for (const strategy of profile.strategies) {
         trials.push({
           id: `r${String(repetition).padStart(2, "0")}-${caseId}-${strategy.replaceAll("_", "-")}`,
           repetition,
@@ -1033,12 +1033,8 @@ function normalizeProfile(value) {
   if (value.variant !== null && (!safeText(value.variant, 100) || isAbsoluteAny(value.variant))) {
     throw new EvaluationError("PROFILE_INVALID", "variant must be null or a bounded string")
   }
-  if (!sameMembers(value.cases, DEFAULT_CASES)) {
-    throw new EvaluationError("PROFILE_INVALID", "profile must include each bundled case exactly once")
-  }
-  if (!sameMembers(value.strategies, DEFAULT_STRATEGIES)) {
-    throw new EvaluationError("PROFILE_INVALID", "profile must include all three strategies exactly once")
-  }
+  const cases = selectedMembers(value.cases, DEFAULT_CASES, "cases")
+  const strategies = selectedMembers(value.strategies, DEFAULT_STRATEGIES, "strategies")
   if (!Array.isArray(value.opencode_command) || value.opencode_command.length < 1 || value.opencode_command.length > 16 || value.opencode_command.some((item) => !safeText(item, 500))) {
     throw new EvaluationError("PROFILE_INVALID", "opencode_command must be a bounded argument array")
   }
@@ -1051,7 +1047,7 @@ function normalizeProfile(value) {
   const repetitions = boundedInteger(value.repetitions, 1, 10, "repetitions")
   const attemptLimit = boundedInteger(value.attempt_limit, 1, 10, "attempt_limit")
   const timeoutSeconds = boundedInteger(value.timeout_seconds, 1, 7200, "timeout_seconds")
-  const maxOutputBytes = boundedInteger(value.max_output_bytes, 1024, 64 * 1024 * 1024, "max_output_bytes")
+  const maxOutputBytes = boundedInteger(value.max_output_bytes, 1024, 4 * 1024 * 1024, "max_output_bytes")
   if (typeof value.keep_test_projects !== "boolean" || typeof value.require_complete_usage !== "boolean") {
     throw new EvaluationError("PROFILE_INVALID", "profile safety flags must be booleans")
   }
@@ -1064,8 +1060,8 @@ function normalizeProfile(value) {
     opencode_command: [...value.opencode_command],
     provider_auth_mode: safeText(value.provider_auth_mode, 64) ? value.provider_auth_mode : "unspecified",
     provider_environment: [...value.provider_environment],
-    strategies: [...DEFAULT_STRATEGIES],
-    cases: [...DEFAULT_CASES],
+    strategies,
+    cases,
     repetitions,
     attempt_limit: attemptLimit,
     timeout_seconds: timeoutSeconds,
@@ -1815,9 +1811,17 @@ function canonical(value) {
   return JSON.stringify(value)
 }
 
-function sameMembers(value, expected) {
-  return Array.isArray(value) && value.length === expected.length &&
-    new Set(value).size === value.length && expected.every((item) => value.includes(item))
+function selectedMembers(value, allowed, field) {
+  if (
+    !Array.isArray(value) || value.length === 0 || value.length > allowed.length ||
+    new Set(value).size !== value.length || value.some((item) => !allowed.includes(item))
+  ) {
+    throw new EvaluationError(
+      "PROFILE_INVALID",
+      `profile ${field} must contain one or more unique supported values`,
+    )
+  }
+  return allowed.filter((item) => value.includes(item))
 }
 
 function boundedInteger(value, minimum, maximum, name) {

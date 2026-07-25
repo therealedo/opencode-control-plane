@@ -356,26 +356,6 @@ function applicationFiles() {
   return files.filter((item) => !ignoredPaths.has(item)).sort()
 }
 
-function nulPaths(value) {
-  return value.split("\0").filter(Boolean).map((item) => normalize(item))
-}
-
-function contractChangedFiles() {
-  const tracked = git(["diff", "--name-only", "-z", "--no-renames", policy.baseline_head, "--"])
-  const untracked = git(["ls-files", "--others", "--exclude-standard", "-z"])
-  for (const [label, result] of [["tracked diff", tracked], ["untracked files", untracked]]) {
-    if (result.error) throw result.error
-    if (result.status !== 0) throw new Error(`Cannot derive phase contract ${label}`)
-  }
-  const files = [...new Set([
-    ...nulPaths(tracked.stdout),
-    ...nulPaths(untracked.stdout),
-    ...modeIntents.keys(),
-  ])].filter((file) => file !== MODE_INTENT_PATH).sort()
-  if (files.length > 256) throw new Error("Phase changed_files exceeds 256 entries")
-  return files
-}
-
 function exactKeys(value, expected, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object`)
   const actual = Object.keys(value).sort()
@@ -532,7 +512,6 @@ function candidateValue(args) {
     attempt: policy.attempt,
     status: args.status,
     summary: boundedContractText(args.summary, "summary", 512),
-    changed_files: contractChangedFiles(),
     environment_variables: normalizedEnvironment.sort(),
     blocker,
   }

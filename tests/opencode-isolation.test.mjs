@@ -729,7 +729,7 @@ test("controller-owned tools exclude ignored content and reject unsafe file iden
   assert.equal(usage.by_tool.mutate.calls >= 6, true)
 })
 
-test("typed phase contracts derive controller-owned identity and exact changed files", async (t) => {
+test("typed phase contracts derive identity and leave Git evidence to the controller", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "autopilot-contract-test-"))
   const profile = await mkdtemp(path.join(os.tmpdir(), "autopilot-contract-profile-"))
   t.after(async () => Promise.all([
@@ -843,14 +843,6 @@ test("typed phase contracts derive controller-owned identity and exact changed f
     attempt: 2,
     status: "complete",
     summary: "Implemented the scoped change.",
-    changed_files: [
-      "src/delete.txt",
-      "src/move.txt",
-      "src/moved.txt",
-      "src/new.txt",
-      "src/script.sh",
-      "src/tracked.txt",
-    ],
     environment_variables: [],
     blocker: null,
   })
@@ -1212,6 +1204,15 @@ test("tainted candidate summary and blocker are removed before state, gates, or 
   assert.equal(state.status, "human_required", stateText)
   assert.equal(state.blocker?.kind, "policy_violation")
   assert.match(state.blocker?.message ?? "", /blocked and removed tainted candidate\.json/i)
+  assert.deepEqual(Object.keys(state.task_tool_usage), ["execute:a1"])
+  assert.deepEqual(state.task_tool_usage["execute:a1"].model_usage, {
+    input_tokens: 130,
+    output_tokens: 24,
+    reasoning_tokens: 6,
+    cache_read_tokens: 70,
+    cache_write_tokens: 10,
+    cost: 0.5,
+  })
   assertSecretRepresentationsAbsent(`${stateText}\n${result.stdout}\n${result.stderr}`, workerSecret)
   await assert.rejects(access(path.join(root, ".autopilot", "runtime", "candidate.json")))
   const observations = await readJson(path.join(root, ".autopilot", "runtime", "isolation-observations.json"))
@@ -1241,6 +1242,15 @@ test("tainted review summary and finding are removed before state, receipt, or a
   assert.equal(state.status, "human_required", stateText)
   assert.equal(state.blocker?.kind, "policy_violation")
   assert.match(state.blocker?.message ?? "", /blocked and removed tainted review\.json/i)
+  assert.deepEqual(Object.keys(state.task_tool_usage), ["execute:a1", "review:a1"])
+  assert.deepEqual(state.task_tool_usage["review:a1"].model_usage, {
+    input_tokens: 130,
+    output_tokens: 24,
+    reasoning_tokens: 6,
+    cache_read_tokens: 70,
+    cache_write_tokens: 10,
+    cost: 0.5,
+  })
   assertSecretRepresentationsAbsent(`${stateText}\n${result.stdout}\n${result.stderr}`, reviewSecret)
   await assert.rejects(access(path.join(root, ".autopilot", "runtime", "review.json")))
   const observations = await readJson(path.join(root, ".autopilot", "runtime", "isolation-observations.json"))

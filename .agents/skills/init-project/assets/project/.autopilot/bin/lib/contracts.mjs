@@ -894,9 +894,13 @@ export function validateCandidate(candidate, taskId, attempt) {
   if (candidate.attempt !== attempt) issue(issues, "candidate.attempt", `must equal ${attempt}`);
   if (!["complete", "blocked", "failed"].includes(candidate.status)) issue(issues, "candidate.status", "is invalid");
   boundedString(issues, "candidate.summary", candidate.summary, { maxBytes: CONTRACT_SUMMARY_CAP });
-  if (!stringArray(candidate.changed_files)) {
-    issue(issues, "candidate.changed_files", "must be a string array");
-  } else {
+  // Legacy candidates may contain changed_files, but the controller derives
+  // authoritative application evidence from Git. Keeping this field optional
+  // preserves upgrade compatibility without duplicating policy logic inside a
+  // model-facing tool.
+  if (candidate.changed_files !== undefined && !stringArray(candidate.changed_files)) {
+    issue(issues, "candidate.changed_files", "must be a string array when present");
+  } else if (candidate.changed_files !== undefined) {
     if (candidate.changed_files.length > CONTRACT_ARRAY_CAP) issue(issues, "candidate.changed_files", `exceeds ${CONTRACT_ARRAY_CAP} entries`);
     for (const [index, file] of candidate.changed_files.entries()) {
       boundedString(issues, `candidate.changed_files.${index}`, file, {

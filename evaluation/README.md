@@ -30,7 +30,7 @@ Run data stays under a marked OpenCode Control Plane folder in the operating sys
 
 ## What is measured
 
-The report keeps provider-reported input, output, reasoning, cache-read, cache-write, and cost dimensions separate. Missing provider usage is `null`/`unavailable`, including in simulation. It is never changed to zero and no universal token sum is invented.
+The report keeps provider-reported input, output, reasoning, cache-read, cache-write, and cost dimensions separate. Missing provider usage is `null`/`unavailable`, including in simulation. It is never changed to zero and no universal token sum is invented. If Control Plane stops after a model phase but before a completion receipt, the evaluator may use only the same strictly validated numeric usage already persisted in controller state; it never infers missing values, and the trial remains failed.
 
 Budgets are soft boundaries checked between trials. A single live trial may cross a limit; the evaluator then refuses to start the next trial. Trial count, active elapsed time, each token dimension, and provider-reported cost have independent checks.
 
@@ -38,7 +38,7 @@ Quality reporting also keeps attempts, repairs, recoveries, reviews, review reje
 
 ## Live runs
 
-Live evaluation uses the fixed model and variant in an explicit local profile. First copy `evaluation/profile.example.json` to the ignored `evaluation/profile.local.json`, replace the `provider/model` placeholder, and select a variant or `null`. It then performs a zero-model capability and credential preflight and runs only after this exact acknowledgement:
+Live evaluation uses the fixed model and variant in an explicit local profile. First copy `evaluation/profile.example.json` to the ignored `evaluation/profile.local.json`, replace the `provider/model` placeholder, select a variant or `null`, and choose one or more bundled cases and strategies. The example selects the complete matrix; a calibration may use an explicit subset. It then performs a zero-model capability and credential preflight and runs only after this exact acknowledgement:
 
 ```powershell
 node scripts/evaluate.mjs --live --profile evaluation/profile.local.json --confirm LIVE_EVALUATION_USES_PROVIDER_CREDITS
