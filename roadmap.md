@@ -42,9 +42,9 @@ Blueprint and migration history belong to the cold planning path. They must not 
 
 Repository ownership and runtime placement are separate concerns. Durable product contracts and accepted evidence should remain reviewable with the project, while frequently written state, logs, locks, temporary phase contracts, and executable runtime files should move out of synchronized target repositories when this can be done without weakening recovery, portability, or rollback.
 
-## Current baseline: v1.6.5
+## Current baseline: v1.6.6
 
-Version 1.6.5 carries forward the v1.6.4 baseline and provides:
+Version 1.6.6 carries forward the v1.6.5 baseline and provides:
 
 - [x] Modular, evolving blueprints.
 - [x] Deterministic scaffolding and upgrades.
@@ -82,8 +82,34 @@ Version 1.6.5 carries forward the v1.6.4 baseline and provides:
 - [x] Context-aware option 8: return to the main fleet dashboard when nested, or close to a usable shell when launched directly.
 - [x] A backwards-compatible fleet marker that does not prevent older project dashboards from opening during staggered upgrades.
 - [x] A checkbox-based roadmap that preserves completed work and makes pending work directly trackable.
+- [x] Bounded, credential-redacted OpenCode launch diagnostics instead of hash-only provider failures.
+- [x] Fleet and project status that cannot mislabel an interrupted active task as safely in maintenance.
+- [x] A narrowly guarded upgrade recovery for v1.6.3 through v1.6.5 tasks exhausted solely by failed OpenCode launches with no application changes.
+- [x] Automatic restoration of that task's exact committed ready queue, with a paused maintenance boundary and auditable migration record.
+- [x] Fail-closed refusal of the recovery when any application file, queue field, phase contract, receipt, transaction, baseline, or controller-liveness proof differs.
 
 The fixed-context measurement and simulated evaluation remain regression guards, not proof of end-to-end token savings or unchanged implementation quality. Controlled live trials across models are the next step before further prompt compression or reduced-review policy.
+
+## Immediate maintenance: v1.6.6 exhausted-launch recovery (shipped)
+
+**Goal:** recover the real v1.6.3 empty-task failure without spending another attempt blindly or weakening project safety.
+
+Delivered outcomes:
+
+- [x] Preserve a maximum 4 KiB sanitized diagnostic when a fresh OpenCode process exits unsuccessfully.
+- [x] Prefer the stopped-controller error over a queued maintenance marker in both project and fleet views.
+- [x] Detect the exact exhausted `OPENCODE_FAILED` state from affected releases during project upgrade.
+- [x] Prove the baseline commit is unchanged, the Git worktree contains only the queue projection, and that projection differs only in revision and runtime statuses.
+- [x] Require the absence of candidate, review, mode-intent, receipt, completion, finalization, and live-controller evidence.
+- [x] Restore the committed ready queue, reset the empty task at a paused maintenance boundary, and record `upgrade-recovery` in migration history.
+- [x] Preserve all files and refuse recovery when any proof is missing or any application change exists.
+
+Exit criteria:
+
+- [x] The reproduced v1.6.3 CRM failure upgrades without deleting or rebuilding the project and can retry M001 from attempt 1.
+- [x] Credential values and terminal escape sequences are absent from retained diagnostics.
+- [x] A modified application file prevents automatic recovery.
+- [x] Ordinary upgrades and the earlier evidence-less recovery remain unchanged.
 
 ## Immediate maintenance: v1.6.5 dashboard navigation (shipped)
 

@@ -1194,9 +1194,12 @@ export class Controller {
       this.state.attempt >= attemptLimit ||
       noProgress >= this.project.config.budgets.max_no_progress
     ) {
+      const diagnostic = ["OPENCODE_FAILED", "OPENCODE_TIMEOUT"].includes(error?.code)
+        ? recoveryText(error?.details?.diagnostic_excerpt, 2048)
+        : null;
       await this.humanRequired({
         ...blockerFrom(error, "repair_exhausted"),
-        message: `Repair stopped after attempt ${this.state.attempt}: ${error.message}`,
+        message: `Repair stopped after attempt ${this.state.attempt}: ${error.message}${diagnostic ? `\nDiagnostic:\n${diagnostic}` : ""}`,
       });
       return { stop: true, evidence: recoveryEvidence };
     }

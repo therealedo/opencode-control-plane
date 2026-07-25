@@ -46,6 +46,8 @@ const PHASE_TOOL_RETURNED_BYTES = 64 * 1024;
 const MAX_FEEDBACK_CALLS = 2;
 const MAX_PHASE_MODEL_COST = 1_000_000;
 const MAX_PHASE_EXACT_SECRETS = 128;
+const FAILURE_DIAGNOSTIC_BYTES = 4096;
+const TERMINAL_ESCAPE_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-_])/g;
 const GATE_RUNNER_SNAPSHOT = Object.freeze([
   "run-gate.mjs",
   "process-guard.mjs",
@@ -1491,9 +1493,14 @@ export async function runFreshOpenCode(project, prompt, {
   const result = sanitizeProcessResult(raw, sterile.secrets, maxOutputBytes);
   if (result.output_truncated) throw new AutopilotError(`Fresh OpenCode ${phase} output exceeded its configured byte cap`, { code: "OPENCODE_OUTPUT_TRUNCATED" });
   if (result.timed_out || result.code !== 0) {
-    throw new AutopilotError(`Fresh OpenCode ${phase} session failed${result.timed_out ? " (timeout)" : ""}; raw output was not persisted`, {
+    const diagnostic_excerpt = failureDiagnostic(result);
+    throw new AutopilotError(`Fresh OpenCode ${phase} session failed${result.timed_out ? " (timeout)" : ""}; a bounded sanitized diagnostic was retained`, {
       code: result.timed_out ? "OPENCODE_TIMEOUT" : "OPENCODE_FAILED",
-      details: { code: result.code, output_hash: sha256(`${result.stdout}\n${result.stderr}`) },
+      details: {
+        code: result.code,
+        output_hash: sha256(`${result.stdout}\n${result.stderr}`),
+        ...(diagnostic_excerpt ? { diagnostic_excerpt } : {}),
+      },
     });
   }
   const sessionId = parseSessionId(result.stdout);
@@ -1507,6 +1514,17 @@ export async function runFreshOpenCode(project, prompt, {
   };
   ephemeralPhaseSecrets.set(phaseResult, phaseSecrets);
   return phaseResult;
+}
+
+function failureDiagnostic(result) {
+  const sections = [];
+  if (result.stderr) sections.push(`stderr:\n${result.stderr}`);
+  if (result.stdout) sections.push(`stdout:\n${result.stdout}`);
+  const clean = sections.join("\n")
+    .replace(TERMINAL_ESCAPE_PATTERN, "")
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, "")
+    .trim();
+  return truncateUtf8(clean, FAILURE_DIAGNOSTIC_BYTES);
 }
 
 export function consumeEphemeralPhaseSecrets(phaseResult) {

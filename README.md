@@ -89,7 +89,7 @@ When an update is shown, press U once. The Control Plane will:
 5. create a reversible local Git commit in each changed project;
 6. resume only workers that were running before the update.
 
-It never kills a worker, silently adopts a legacy project, overwrites application code, or hides a failed project. If one project is dirty, unavailable, or blocked, other safe projects still update; fix the named problem and press U again.
+It never kills a worker, silently adopts a legacy project, overwrites application code, or hides a failed project. If one project is dirty, unavailable, or blocked, other safe projects still update. A narrowly recognized failure from versions 1.6.3 through 1.6.5 is repaired during upgrade only when Git proves OpenCode created no application changes and the queue changed only its runtime status; every other blocked project still fails closed for review.
 
 ### Upgrade from Control Plane 1.0
 
@@ -127,6 +127,7 @@ Local workers are policy-bounded, not operating-system sandboxed. OpenCode and p
 - **`control-plane` is not recognized:** reopen the terminal. If it still fails, add the setup-reported command folder to your user PATH.
 - **Not ready:** open the project and choose **Check readiness**; fix the first named item, then Start.
 - **Waiting for you:** complete the exact action shown, then Resume.
+- **OpenCode failed without a useful reason:** update to v1.6.6 or newer. New failures retain a short sanitized diagnostic, never the raw provider output or detected credential values.
 - **Update deferred:** resolve the active blocker or dirty Git worktree, return to a safe boundary, and press U again.
 - **Managed-file drift:** do not force the update. Restore or review the named Control Plane-owned file first.
 - **Project moved:** press F on the missing entry, then A and select its new folder.

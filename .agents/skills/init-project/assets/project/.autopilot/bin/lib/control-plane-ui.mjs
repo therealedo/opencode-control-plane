@@ -26,11 +26,6 @@ export function controllerMode(status = {}) {
   if (live) return { id: "running", label: "Running", detail: friendlyPhase(status.phase) };
   if (status.status === "complete") return { id: "complete", label: "Complete", detail: "All accepted work is complete" };
   if (status.status === "human_required") return { id: "human_required", label: "Waiting for you", detail: friendlyPhase(status.phase) };
-  if (status.maintenance_requested || status.phase === "maintenance") {
-    return { id: "maintenance", label: "Maintenance", detail: "Safe for blueprint or Control Plane changes" };
-  }
-  if (status.stop_requested || status.phase === "stopped") return { id: "stopped", label: "Stopped", detail: "Resume when you are ready" };
-  if (status.pause_requested || status.status === "paused") return { id: "paused", label: "Paused", detail: "Resume when you are ready" };
   if (status.status === "running") {
     const error = safeText(status.controller_error?.message ?? "", 88);
     return {
@@ -39,6 +34,14 @@ export function controllerMode(status = {}) {
       detail: error ? `Stopped: ${error}` : "The worker is no longer running",
     };
   }
+  if (status.maintenance_requested && status.active_task) {
+    return { id: "maintenance_queued", label: "Maintenance queued", detail: "The active task must finish or recover first" };
+  }
+  if (status.maintenance_requested || status.phase === "maintenance") {
+    return { id: "maintenance", label: "Maintenance", detail: "Safe for blueprint or Control Plane changes" };
+  }
+  if (status.stop_requested || status.phase === "stopped") return { id: "stopped", label: "Stopped", detail: "Resume when you are ready" };
+  if (status.pause_requested || status.status === "paused") return { id: "paused", label: "Paused", detail: "Resume when you are ready" };
   if (status.status === "failed") return { id: "failed", label: "Needs attention", detail: "Inspect the blocker, then resume" };
   return { id: "idle", label: "Ready", detail: "Start autonomous work" };
 }
@@ -47,7 +50,7 @@ export function primaryAction(status = {}) {
   const mode = controllerMode(status);
   if (mode.id === "running") return { id: "pause", label: "Pause safely", enabled: true, confirm: false };
   if (mode.id === "complete") return { id: "run", label: "Project complete", enabled: false, confirm: false };
-  if (["paused", "stopped", "maintenance", "human_required", "failed", "interrupted"].includes(mode.id)) {
+  if (["paused", "stopped", "maintenance", "maintenance_queued", "human_required", "failed", "interrupted"].includes(mode.id)) {
     return {
       id: "resume",
       label: mode.id === "human_required"

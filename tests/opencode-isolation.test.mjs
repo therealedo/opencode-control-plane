@@ -171,6 +171,14 @@ const fileReference = /\{file:([^}]+)\}/.exec(JSON.stringify(config.mcp))?.[1]
 if (!fileReference) throw new Error("phase credential was not converted to a file reference")
 const secret = await readFile(fileReference, "utf8")
 if (configText.includes(secret)) throw new Error("phase secret was embedded in inline OpenCode config")
+let launchFailureMode = ""
+try { launchFailureMode = (await readFile(path.join(runtime, "launch-failure-mode.txt"), "utf8")).trim() }
+catch (error) { if (error?.code !== "ENOENT") throw error }
+if (launchFailureMode === "exit") {
+  process.stderr.write("\u001b[31mprovider launch denied; token=" + secret + "\u001b[0m\n" + "bounded-detail ".repeat(600))
+  process.stdout.write("stdout token=" + secret + "\n")
+  process.exit(7)
+}
 
 const agent = worker ? (stage === "repair" ? "autopilot-recovery" : "autopilot-worker") : "autopilot-reviewer"
 const agentText = await readFile(path.join(process.env.OPENCODE_CONFIG_DIR, "agents", agent + ".md"), "utf8")
@@ -1477,6 +1485,47 @@ test("fresh launcher records bounded model usage, deduplicates identical parts, 
     (await readdir(path.join(root, ".autopilot", "runtime"))).filter((name) => name.startsWith("opencode-phase-")),
     [],
   )
+})
+
+test("failed OpenCode launches retain only a bounded sanitized diagnostic", async (t) => {
+  const root = await createScaffold(t, { ready: true })
+  const workerSecret = "worker-diagnostic-secret-987654"
+  await configureIsolationProject(t, root, { workerSecret })
+  await writeFile(path.join(root, ".autopilot", "runtime", "launch-failure-mode.txt"), "exit\n", "utf8")
+  const environment = await sterileControllerEnvironment(root)
+  const previousData = process.env.XDG_DATA_HOME
+  const previousAuth = process.env.OPENCODE_AUTH_CONTENT
+  process.env.XDG_DATA_HOME = environment.XDG_DATA_HOME
+  delete process.env.OPENCODE_AUTH_CONTENT
+  try {
+    const projectModule = await import(pathToFileURL(path.join(root, ".autopilot", "bin", "lib", "project.mjs")))
+    const isolatedModule = await import(pathToFileURL(path.join(root, ".autopilot", "bin", "lib", "opencode-isolated.mjs")))
+    const project = await projectModule.loadProject(root)
+    await assert.rejects(
+      isolatedModule.runFreshOpenCode(project, "Stage: execute\nTask: M001\nAttempt: 1\n", {
+        phase: "execute",
+        taskId: "M001",
+        attempt: 1,
+        baseline: await git(root, ["rev-parse", "HEAD"]),
+      }),
+      (error) => {
+        assert.equal(error?.code, "OPENCODE_FAILED")
+        assert.equal(error?.details?.code, 7)
+        assert.match(error?.message ?? "", /bounded sanitized diagnostic was retained/)
+        assert.match(error?.details?.diagnostic_excerpt ?? "", /provider launch denied/)
+        assert.match(error?.details?.diagnostic_excerpt ?? "", /\[REDACTED\]/)
+        assert.doesNotMatch(error?.details?.diagnostic_excerpt ?? "", new RegExp(workerSecret))
+        assert.doesNotMatch(error?.details?.diagnostic_excerpt ?? "", /\x1b/)
+        assert.ok(Buffer.byteLength(error?.details?.diagnostic_excerpt ?? "", "utf8") <= 4096)
+        return true
+      },
+    )
+  } finally {
+    if (previousData === undefined) delete process.env.XDG_DATA_HOME
+    else process.env.XDG_DATA_HOME = previousData
+    if (previousAuth === undefined) delete process.env.OPENCODE_AUTH_CONTENT
+    else process.env.OPENCODE_AUTH_CONTENT = previousAuth
+  }
 })
 
 test("fresh phases use pure sterile profiles and file-substituted MCP credentials", async (t) => {

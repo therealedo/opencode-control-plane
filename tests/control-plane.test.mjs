@@ -27,6 +27,17 @@ test("dashboard derives safe context actions without touching controller state",
   assert.equal(primaryAction({ status: "human_required" }).confirm, true);
   assert.equal(primaryAction({ status: "complete" }).enabled, false);
   assert.equal(controllerMode({ status: "running", controller_lock: null }).id, "interrupted");
+  assert.equal(controllerMode({
+    status: "running",
+    controller_lock: null,
+    active_task: "M001",
+    maintenance_requested: true,
+  }).id, "interrupted");
+  assert.equal(controllerMode({
+    status: "paused",
+    active_task: "M001",
+    maintenance_requested: true,
+  }).id, "maintenance_queued");
   assert.equal(primaryAction({
     status: "running",
     controller_lock: null,
@@ -107,7 +118,7 @@ test("dashboard strips terminal control input and renders the public identity", 
       blocker: { message: injected },
       task_counts: { done: 1, blocked: 1 },
     },
-    metadata: { installed_version: "1.6.5", blueprint_version: 2, runtime_variant: "high" },
+    metadata: { installed_version: "1.6.6", blueprint_version: 2, runtime_variant: "high" },
     width: 88,
   });
   assert.match(rendered, /^OpenCode Control Plane/m);
@@ -124,7 +135,7 @@ test("noninteractive dashboard snapshot reports version, state, and visible acti
   assert.equal(result.code, 0, result.stderr);
   const snapshot = JSON.parse(result.stdout);
   assert.equal(snapshot.status.status, "idle");
-  assert.equal(snapshot.metadata.installed_version, "1.6.5");
+  assert.equal(snapshot.metadata.installed_version, "1.6.6");
   assert.equal(snapshot.metadata.runtime_variant, "default");
   assert.equal(snapshot.actions.length, 8);
   assert.equal(snapshot.actions[0].id, "start");

@@ -11,7 +11,7 @@ import {
   renderFleet,
   terminalColorEnabled,
 } from "../.agents/skills/init-project/bin/lib/global-control-plane-ui.mjs";
-import { createScaffold, repositoryRoot, run } from "./runtime-helpers.mjs";
+import { createScaffold, readJson, repositoryRoot, run, writeJson } from "./runtime-helpers.mjs";
 
 const globalDashboard = path.join(repositoryRoot, ".agents", "skills", "init-project", "bin", "control-plane-global.mjs");
 
@@ -27,7 +27,7 @@ test("fleet actions are arrow-selectable while preserving shortcut keys", () => 
   assert.equal(withoutProject[2].enabled, false);
   assert.equal(nextFleetAction(withoutProject, 0, 1), 1);
 
-  const rendered = renderFleet({ projects: [project], selected: 0, selectedAction: 1, update: { installed_version: "1.6.5" } });
+  const rendered = renderFleet({ projects: [project], selected: 0, selectedAction: 1, update: { installed_version: "1.6.6" } });
   assert.match(rendered, /Actions  ←\/→ select/);
   assert.match(rendered, /↑\/↓/);
   assert.match(rendered, /\[A: Add project\]/);
@@ -37,7 +37,7 @@ test("fleet actions are arrow-selectable while preserving shortcut keys", () => 
     projects: [project],
     selected: 0,
     selectedAction: 1,
-    update: { installed_version: "1.6.5" },
+    update: { installed_version: "1.6.6" },
     color: true,
   });
   assert.match(colored, /\x1b\[1;36m▶ Producer Scribe/);
@@ -67,14 +67,14 @@ test("fleet rendering stays inside the requested terminal height", () => {
     mode: { id: index === 0 ? "running" : "idle", label: index === 0 ? "Running" : "Ready" },
     status: {},
     blueprint_version: 1,
-    control_plane_version: "1.6.5",
+    control_plane_version: "1.6.6",
   }));
   const height = 24;
   const rendered = renderFleet({
     projects,
     selected: 15,
     selectedAction: 0,
-    update: { installed_version: "1.6.5" },
+    update: { installed_version: "1.6.6" },
     message: "Ready.",
     width: 64,
     height,
@@ -116,4 +116,34 @@ test("global snapshot isolates missing projects instead of hiding them", async (
   assert.equal(value.projects.length, 1);
   assert.equal(value.projects[0].available, false);
   assert.match(value.projects[0].error, /does not exist/i);
+});
+
+test("fleet status exposes an interrupted worker even when maintenance is queued", async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "ocp-global-interrupted-home-"));
+  t.after(async () => rm(home, { recursive: true, force: true }));
+  const root = await createScaffold(t, { ready: true });
+  const stateFile = path.join(root, ".autopilot", "state.json");
+  const queueFile = path.join(root, ".project", "plan", "queue.json");
+  const state = await readJson(stateFile);
+  const queue = await readJson(queueFile);
+  Object.assign(state, { status: "running", phase: "recovering", active_task: "M001", attempt: 1, pid: null });
+  queue.project_status = "running";
+  queue.tasks.M001.status = "in_progress";
+  await writeJson(stateFile, state);
+  await writeJson(queueFile, queue);
+  await writeFile(path.join(root, ".autopilot", "MAINTENANCE"), "requested\n", "utf8");
+  await writeJson(path.join(root, ".autopilot", "artifacts", "controller.log"), {
+    ok: false,
+    code: "OPENCODE_FAILED",
+    error: "Fresh OpenCode repair session failed with a retained diagnostic.",
+  });
+  await registerProject(root, { home, name: "Interrupted project" });
+
+  const result = await run([process.execPath, globalDashboard, "--home", home, "--snapshot", "--json"], { cwd: repositoryRoot });
+  assert.equal(result.code, 0, result.stderr || result.stdout);
+  const project = JSON.parse(result.stdout).projects[0];
+  assert.equal(project.mode.id, "interrupted");
+  assert.match(project.mode.detail, /retained diagnostic/);
+  assert.equal(project.status.maintenance_requested, true);
+  assert.equal(project.status.controller_error.code, "OPENCODE_FAILED");
 });

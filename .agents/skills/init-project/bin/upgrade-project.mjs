@@ -52,9 +52,6 @@ async function main() {
   await assertStandaloneProject(target);
   const { release, entries } = await collectManagedSources(skillRoot);
   const manifestFile = path.join(target, ".autopilot", "control-plane.json");
-  const state = await readBoundedJson(path.join(target, ".autopilot", "state.json"), 64 * 1024, { optional: true }) ?? {};
-  const recoveryBoundary = await assertSafeControllerBoundary(target, state);
-
   const previous = await readBoundedJson(manifestFile, MANIFEST_BYTES, { optional: true });
   if (!previous && !args.adopt) {
     throw upgradeError(
@@ -63,6 +60,8 @@ async function main() {
     );
   }
   if (previous) await validatePreviousManifest(target, previous);
+  const state = await readBoundedJson(path.join(target, ".autopilot", "state.json"), 64 * 1024, { optional: true }) ?? {};
+  const recoveryBoundary = await assertSafeControllerBoundary(target, state, previous);
   if (previous && compareVersions(previous.version, release.version) > 0) {
     throw upgradeError(`Downgrades are not allowed (${previous.version} -> ${release.version})`, "DOWNGRADE_DENIED");
   }
@@ -103,6 +102,7 @@ async function main() {
     changed_files: [...candidates.keys()],
     retained_retired_files: Object.keys(previous?.managed_files ?? {}).filter((relative) => !entries.has(relative)),
     recovered_active_task: recoveryBoundary?.taskId ?? null,
+    recovery_kind: recoveryBoundary?.kind ?? null,
   };
   if (args.dryRun) return output(preview);
   if (!preview.changed) return output({ ...preview, commit: null, rollback: null });
@@ -254,6 +254,7 @@ async function applyTransaction({ target, skillRoot, release, previous, candidat
   const swaps = [];
   let committed = false;
   let stagedByGit = false;
+  let recoveryApplied = false;
   try {
     for (const [relative, bytes] of candidates) {
       const destination = resolveManaged(target, relative);
@@ -273,12 +274,25 @@ async function applyTransaction({ target, skillRoot, release, previous, candidat
     await performSwaps(swaps);
     if (await exists(path.join(target, "control-plane"))) await chmod(path.join(target, "control-plane"), 0o755);
 
+    if (recoveryBoundary?.kind === "exhausted-empty-opencode") {
+      await applyExhaustedRecovery(target, recoveryBoundary);
+      recoveryApplied = true;
+    }
+
     const installedAt = new Date().toISOString();
     const manifest = await createInstalledManifest(skillRoot, target, {
       installedAt,
       previous,
-      kind: previous ? "upgrade" : "legacy-adoption",
+      kind: recoveryBoundary?.kind === "exhausted-empty-opencode"
+        ? "upgrade-recovery"
+        : previous ? "upgrade" : "legacy-adoption",
     });
+    if (recoveryBoundary?.kind === "exhausted-empty-opencode") {
+      Object.assign(manifest.migration_history.at(-1), {
+        recovered_task: recoveryBoundary.taskId,
+        recovery_reason: "exhausted-empty-opencode",
+      });
+    }
     const manifestSwap = await stageManifestSwap(target, manifestFile, manifest, nonce);
     swaps.push(manifestSwap);
     await performSwaps([manifestSwap]);
@@ -319,7 +333,9 @@ async function applyTransaction({ target, skillRoot, release, previous, candidat
     const commitResult = await git(target, ["commit", "--no-verify", "-m", message]);
     const commit = (await git(target, ["rev-parse", "HEAD"])).stdout.trim();
     committed = true;
-    if (recoveryBoundary) await advanceRecoveryBaseline(target, recoveryBoundary, commit);
+    if (recoveryBoundary?.kind === "legacy-insufficient-evidence") {
+      await advanceRecoveryBaseline(target, recoveryBoundary, commit);
+    }
     for (const swap of swaps) {
       if (swap.backupMoved) {
         await rm(swap.backup, { force: true });
@@ -327,7 +343,11 @@ async function applyTransaction({ target, skillRoot, release, previous, candidat
       }
       await rm(swap.stage, { force: true });
     }
-    await assertCleanGit(target, { allowedDirty: recoveryBoundary?.allowedDirty ?? [] });
+    await assertCleanGit(target, {
+      allowedDirty: recoveryBoundary?.kind === "legacy-insufficient-evidence"
+        ? recoveryBoundary.allowedDirty
+        : [],
+    });
     void commitResult;
     return { commit, validation };
   } catch (error) {
@@ -335,6 +355,15 @@ async function applyTransaction({ target, skillRoot, release, previous, candidat
       throw upgradeError(`${error.message}; the validated upgrade commit was retained for safe manual revert`, error.code ?? "UPGRADE_POST_COMMIT_FAILED");
     }
     const rollbackErrors = [];
+    if (recoveryApplied) {
+      try {
+        await atomicWriteFile(path.join(target, ".autopilot", "state.json"), recoveryBoundary.stateBytes);
+        await atomicWriteFile(path.join(target, ".project", "plan", "queue.json"), recoveryBoundary.queueBytes);
+        recoveryApplied = false;
+      } catch (rollbackError) {
+        rollbackErrors.push(`exhausted task recovery: ${rollbackError.message}`);
+      }
+    }
     for (const swap of [...swaps].reverse()) {
       try {
         if (swap.installed) await rm(swap.destination, { force: true });
@@ -425,7 +454,7 @@ async function validatePreviousManifest(target, manifest) {
   }
 }
 
-async function assertSafeControllerBoundary(target, state) {
+async function assertSafeControllerBoundary(target, state, previous) {
   const lock = path.join(target, ".git", "autopilot-controller.lock");
   if (await exists(lock)) {
     try {
@@ -447,7 +476,7 @@ async function assertSafeControllerBoundary(target, state) {
   const queue = await readBoundedJson(path.join(target, ...queueRelative.split("/")), MANIFEST_BYTES, { optional: true });
   const candidate = await readBoundedJson(path.join(target, ".autopilot", "runtime", "candidate.json"), 64 * 1024, { optional: true });
   const head = (await git(target, ["rev-parse", "HEAD"])).stdout.trim();
-  const recoverable =
+  const legacyRecoverable =
     state.status === "human_required" &&
     state.phase === "blocked" &&
     state.pid === null &&
@@ -463,14 +492,124 @@ async function assertSafeControllerBoundary(target, state) {
     candidate?.attempt === attempt &&
     candidate?.status === "blocked" &&
     candidate?.blocker?.kind === "insufficient_evidence";
-  if (!recoverable) throw upgradeError(`Task ${taskId} is still active; wait for a task boundary`, "ACTIVE_TASK");
+  if (legacyRecoverable) {
+    return {
+      kind: "legacy-insufficient-evidence",
+      taskId,
+      attempt,
+      baselineHead: head,
+      stateRevision: Number(state.revision ?? 0),
+      allowedDirty: [queueRelative],
+    };
+  }
+
+  const affectedVersion = previous?.version &&
+    compareVersions(previous.version, "1.6.3") >= 0 &&
+    compareVersions(previous.version, "1.6.5") <= 0;
+  const task = queue?.tasks?.[taskId];
+  const attemptLimit = Math.min(
+    Number(task?.attempt_limit ?? Number.POSITIVE_INFINITY),
+    Number((await readBoundedJson(path.join(target, ".autopilot", "config.json"), MANIFEST_BYTES))?.budgets?.max_attempts_per_task ?? Number.POSITIVE_INFINITY),
+  );
+  const runtimeArtifactsAbsent = await Promise.all([
+    "candidate.json",
+    "review.json",
+    "mode-intent.json",
+  ].map((name) => exists(path.join(target, ".autopilot", "runtime", name))));
+  const receiptAbsent = !(await exists(path.join(target, ".project", "receipts", `${taskId}.json`)));
+  const exhaustedShape =
+    affectedVersion &&
+    state.status === "human_required" &&
+    state.phase === "blocked" &&
+    state.pid === null &&
+    state.blocker?.kind === "repair_exhausted" &&
+    state.blocker?.error_code === "OPENCODE_FAILED" &&
+    state.last_failure_evidence?.failure?.code === "OPENCODE_FAILED" &&
+    typeof state.last_failure_fingerprint === "string" &&
+    state.last_failure_fingerprint.length > 0 &&
+    Number.isFinite(attemptLimit) && attemptLimit > 0 && attempt === attemptLimit &&
+    typeof state.baseline_head === "string" && state.baseline_head === head &&
+    ["running", "blocked"].includes(queue?.project_status) &&
+    ["in_progress", "blocked"].includes(task?.status) &&
+    runtimeArtifactsAbsent.every((present) => !present) &&
+    receiptAbsent;
+  if (!exhaustedShape) throw upgradeError(`Task ${taskId} is still active; wait for a task boundary`, "ACTIVE_TASK");
+
+  await assertCleanGit(target, { allowedDirty: [queueRelative] });
+  const headQueueResult = await git(target, ["show", `HEAD:${queueRelative}`]);
+  if (Buffer.byteLength(headQueueResult.stdout, "utf8") > MANIFEST_BYTES) {
+    throw upgradeError("Baseline queue exceeds its recovery cap", "ACTIVE_TASK");
+  }
+  let headQueue;
+  try { headQueue = JSON.parse(headQueueResult.stdout); }
+  catch { throw upgradeError("Baseline queue is not valid JSON", "ACTIVE_TASK"); }
+  const projected = structuredClone(queue);
+  projected.revision = headQueue.revision;
+  projected.project_status = headQueue.project_status;
+  if (projected.tasks?.[taskId]) projected.tasks[taskId].status = headQueue.tasks?.[taskId]?.status;
+  if (
+    headQueue.project_status !== "ready" ||
+    headQueue.tasks?.[taskId]?.status !== "ready" ||
+    JSON.stringify(projected) !== JSON.stringify(headQueue)
+  ) throw upgradeError("The active task queue contains changes beyond empty runtime status fields", "ACTIVE_TASK");
+
+  const stateBytes = await readManagedFile(path.join(target, ".autopilot", "state.json"));
+  const queueBytes = await readManagedFile(path.join(target, ".project", "plan", "queue.json"));
   return {
+    kind: "exhausted-empty-opencode",
     taskId,
     attempt,
     baselineHead: head,
     stateRevision: Number(state.revision ?? 0),
     allowedDirty: [queueRelative],
+    stateBytes,
+    queueBytes,
+    baselineQueueBytes: Buffer.from(headQueueResult.stdout, "utf8"),
   };
+}
+
+async function applyExhaustedRecovery(target, boundary) {
+  const stateFile = path.join(target, ".autopilot", "state.json");
+  const current = await readBoundedJson(stateFile, 64 * 1024);
+  if (
+    current.revision !== boundary.stateRevision ||
+    current.status !== "human_required" ||
+    current.phase !== "blocked" ||
+    current.active_task !== boundary.taskId ||
+    current.attempt !== boundary.attempt ||
+    current.baseline_head !== boundary.baselineHead ||
+    current.blocker?.kind !== "repair_exhausted" ||
+    current.blocker?.error_code !== "OPENCODE_FAILED"
+  ) throw upgradeError("Blocked task state changed during the framework upgrade", "UPGRADE_RACE");
+  const next = {
+    ...current,
+    revision: Number(current.revision ?? 0) + 1,
+    run_id: null,
+    status: "paused",
+    phase: "maintenance",
+    pid: null,
+    started_at: null,
+    heartbeat_at: new Date().toISOString(),
+    completed_in_run: 0,
+    active_task: null,
+    attempt: 0,
+    no_progress_count: 0,
+    last_progress_hash: null,
+    last_failure_fingerprint: null,
+    last_failure_evidence: null,
+    last_session: null,
+    session_ids: [],
+    task_tool_usage: {},
+    blocker: null,
+    completion: null,
+    finalization: null,
+  };
+  const contents = `${JSON.stringify(next, null, 2)}\n`;
+  if (Buffer.byteLength(contents, "utf8") > 64 * 1024) {
+    throw upgradeError("Controller state exceeds its recovery cap", "STATE_CAPACITY_EXHAUSTED");
+  }
+  await atomicWriteFile(path.join(target, ".project", "plan", "queue.json"), boundary.baselineQueueBytes);
+  await atomicWriteFile(stateFile, contents);
 }
 
 async function advanceRecoveryBaseline(target, boundary, commit) {

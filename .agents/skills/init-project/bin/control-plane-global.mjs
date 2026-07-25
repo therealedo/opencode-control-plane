@@ -373,7 +373,7 @@ export async function inspectFleet(home = selectedHome(), globalVersion = null) 
 
 export async function inspectProject(rootValue) {
   const root = await canonicalProjectRoot(rootValue);
-  const [state, queue, manifest, record, pause, stop, maintenance, lock] = await Promise.all([
+  const [state, queue, manifest, record, pause, stop, maintenance, lock, controllerLog] = await Promise.all([
     readBoundedJson(path.join(root, ".autopilot", "state.json"), 128 * 1024),
     readBoundedJson(path.join(root, ".project", "plan", "queue.json"), 2 * 1024 * 1024),
     readBoundedJson(path.join(root, ".autopilot", "control-plane.json"), 512 * 1024, { optional: true }),
@@ -382,6 +382,7 @@ export async function inspectProject(rootValue) {
     existsPrivate(path.join(root, ".autopilot", "STOP")),
     existsPrivate(path.join(root, ".autopilot", "MAINTENANCE")),
     liveControllerLock(path.join(root, ".git", "autopilot-controller.lock")),
+    readBoundedJson(path.join(root, ".autopilot", "artifacts", "controller.log"), 64 * 1024, { optional: true }).catch(() => null),
   ]);
   if (!queue?.tasks || typeof queue.tasks !== "object" || Array.isArray(queue.tasks)) throw new Error("Project queue is invalid");
   const counts = {};
@@ -390,6 +391,12 @@ export async function inspectProject(rootValue) {
   const status = {
     ...state,
     controller_lock: lock,
+    controller_error: lock || typeof controllerLog?.error !== "string" || !controllerLog.error.trim()
+      ? null
+      : {
+          code: typeof controllerLog.code === "string" && controllerLog.code ? controllerLog.code : "ERROR",
+          message: controllerLog.error,
+        },
     pause_requested: pause,
     stop_requested: stop,
     maintenance_requested: maintenance,
