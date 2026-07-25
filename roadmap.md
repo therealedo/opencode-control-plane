@@ -38,9 +38,9 @@ The system should retain three clearly separated layers:
 
 Blueprint and migration history belong to the cold planning path. They must not be repeatedly loaded into the autonomous execution path.
 
-## Current baseline: v1.6.2
+## Current baseline: v1.6.3
 
-Version 1.6.2 provides:
+Version 1.6.3 provides:
 
 - modular, evolving blueprints;
 - deterministic scaffolding and upgrades;
@@ -71,6 +71,8 @@ Version 1.6.2 provides:
 - matching 4 MiB evaluator/worker output ceilings, Windows long-path Git isolation, and bounded calibration subsets.
 - evidence-aware interruption recovery that re-enters implementation when no repair fingerprint exists;
 - a narrowly guarded v1.6.1 recovery that refunds only an evidence-less repair proven to have changed no application files.
+- a one-click upgrade bridge for that exact blocked state, with the task baseline advanced to the reversible framework-upgrade commit before resume;
+- unchanged fail-closed upgrade behavior for running tasks, application changes, staged queue changes, and all other active transactions.
 
 The fixed-context measurement and simulated evaluation remain regression guards, not proof of end-to-end token savings or unchanged implementation quality. Controlled live trials across models are the next step before further prompt compression or reduced-review policy.
 

@@ -22,6 +22,9 @@ import {
   mergeManagedSource,
 } from "./lib/control-plane-files.mjs";
 import {
+  atomicWriteFile,
+} from "../assets/project/.autopilot/bin/lib/core.mjs";
+import {
   externalExecutionEnv,
   gitSafeAmbientConfigArgs,
   resolveExternalGitExecutable,
@@ -50,7 +53,7 @@ async function main() {
   const { release, entries } = await collectManagedSources(skillRoot);
   const manifestFile = path.join(target, ".autopilot", "control-plane.json");
   const state = await readBoundedJson(path.join(target, ".autopilot", "state.json"), 64 * 1024, { optional: true }) ?? {};
-  await assertSafeControllerBoundary(target, state);
+  const recoveryBoundary = await assertSafeControllerBoundary(target, state);
 
   const previous = await readBoundedJson(manifestFile, MANIFEST_BYTES, { optional: true });
   if (!previous && !args.adopt) {
@@ -67,7 +70,7 @@ async function main() {
     if (args.adopt || !previous) throw upgradeError("Interview refresh requires existing versioned ownership", "INTERVIEW_REFRESH_DENIED");
     await assertInterviewBoundary(target, state);
   } else {
-    await assertCleanGit(target);
+    await assertCleanGit(target, { allowedDirty: recoveryBoundary?.allowedDirty ?? [] });
   }
 
   const candidates = new Map();
@@ -99,6 +102,7 @@ async function main() {
     changed: candidates.size > 0 || !previous || previous.version !== release.version,
     changed_files: [...candidates.keys()],
     retained_retired_files: Object.keys(previous?.managed_files ?? {}).filter((relative) => !entries.has(relative)),
+    recovered_active_task: recoveryBoundary?.taskId ?? null,
   };
   if (args.dryRun) return output(preview);
   if (!preview.changed) return output({ ...preview, commit: null, rollback: null });
@@ -123,7 +127,16 @@ async function main() {
     });
   }
 
-  const transaction = await applyTransaction({ target, skillRoot, release, entries, previous, candidates, manifestFile });
+  const transaction = await applyTransaction({
+    target,
+    skillRoot,
+    release,
+    entries,
+    previous,
+    candidates,
+    manifestFile,
+    recoveryBoundary,
+  });
   output({
     ...preview,
     commit: transaction.commit,
@@ -236,7 +249,7 @@ async function applyInterviewRefresh({ target, skillRoot, release, entries, prev
   }
 }
 
-async function applyTransaction({ target, skillRoot, release, previous, candidates, manifestFile }) {
+async function applyTransaction({ target, skillRoot, release, previous, candidates, manifestFile, recoveryBoundary }) {
   const nonce = `${process.pid}-${randomBytes(6).toString("hex")}`;
   const swaps = [];
   let committed = false;
@@ -306,6 +319,7 @@ async function applyTransaction({ target, skillRoot, release, previous, candidat
     const commitResult = await git(target, ["commit", "--no-verify", "-m", message]);
     const commit = (await git(target, ["rev-parse", "HEAD"])).stdout.trim();
     committed = true;
+    if (recoveryBoundary) await advanceRecoveryBaseline(target, recoveryBoundary, commit);
     for (const swap of swaps) {
       if (swap.backupMoved) {
         await rm(swap.backup, { force: true });
@@ -313,8 +327,7 @@ async function applyTransaction({ target, skillRoot, release, previous, candidat
       }
       await rm(swap.stage, { force: true });
     }
-    const status = (await git(target, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])).stdout;
-    if (status) throw upgradeError("Upgrade commit did not leave a clean project", "UPGRADE_GIT_NOT_CLEAN");
+    await assertCleanGit(target, { allowedDirty: recoveryBoundary?.allowedDirty ?? [] });
     void commitResult;
     return { commit, validation };
   } catch (error) {
@@ -424,9 +437,65 @@ async function assertSafeControllerBoundary(target, state) {
       if (error?.code === "CONTROLLER_RUNNING") throw error;
     }
   }
-  if (state.active_task) throw upgradeError(`Task ${state.active_task} is still active; wait for a task boundary`, "ACTIVE_TASK");
   if (state.completion) throw upgradeError("A task completion transaction is unfinished", "ACTIVE_TRANSACTION");
   if (state.finalization) throw upgradeError("A project finalization transaction is unfinished", "ACTIVE_TRANSACTION");
+  if (!state.active_task) return null;
+
+  const taskId = state.active_task;
+  const attempt = Number(state.attempt ?? 0);
+  const queueRelative = ".project/plan/queue.json";
+  const queue = await readBoundedJson(path.join(target, ...queueRelative.split("/")), MANIFEST_BYTES, { optional: true });
+  const candidate = await readBoundedJson(path.join(target, ".autopilot", "runtime", "candidate.json"), 64 * 1024, { optional: true });
+  const head = (await git(target, ["rev-parse", "HEAD"])).stdout.trim();
+  const recoverable =
+    state.status === "human_required" &&
+    state.phase === "blocked" &&
+    state.pid === null &&
+    state.blocker?.kind === "insufficient_evidence" &&
+    state.last_failure_fingerprint === null &&
+    state.last_failure_evidence === null &&
+    attempt > 1 &&
+    typeof state.baseline_head === "string" &&
+    state.baseline_head === head &&
+    queue?.project_status === "blocked" &&
+    queue?.tasks?.[taskId]?.status === "blocked" &&
+    candidate?.task_id === taskId &&
+    candidate?.attempt === attempt &&
+    candidate?.status === "blocked" &&
+    candidate?.blocker?.kind === "insufficient_evidence";
+  if (!recoverable) throw upgradeError(`Task ${taskId} is still active; wait for a task boundary`, "ACTIVE_TASK");
+  return {
+    taskId,
+    attempt,
+    baselineHead: head,
+    stateRevision: Number(state.revision ?? 0),
+    allowedDirty: [queueRelative],
+  };
+}
+
+async function advanceRecoveryBaseline(target, boundary, commit) {
+  const stateFile = path.join(target, ".autopilot", "state.json");
+  const state = await readBoundedJson(stateFile, 64 * 1024);
+  if (
+    state.revision !== boundary.stateRevision ||
+    state.status !== "human_required" ||
+    state.phase !== "blocked" ||
+    state.active_task !== boundary.taskId ||
+    state.attempt !== boundary.attempt ||
+    state.baseline_head !== boundary.baselineHead ||
+    state.blocker?.kind !== "insufficient_evidence"
+  ) throw upgradeError("Blocked task state changed during the framework upgrade", "UPGRADE_RACE");
+  const next = {
+    ...state,
+    revision: Number(state.revision ?? 0) + 1,
+    heartbeat_at: new Date().toISOString(),
+    baseline_head: commit,
+  };
+  const contents = `${JSON.stringify(next, null, 2)}\n`;
+  if (Buffer.byteLength(contents) > 64 * 1024) {
+    throw upgradeError("Controller state exceeds its recovery cap", "STATE_CAPACITY_EXHAUSTED");
+  }
+  await atomicWriteFile(stateFile, contents);
 }
 
 async function assertInterviewBoundary(target, state) {
@@ -467,9 +536,17 @@ async function assertStandaloneProject(target) {
   await access(path.join(target, ".autopilot", "config.json"));
 }
 
-async function assertCleanGit(target) {
+async function assertCleanGit(target, { allowedDirty = [] } = {}) {
   const status = (await git(target, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])).stdout;
-  if (status) throw upgradeError("Commit or discard existing project changes before upgrading the Control Plane", "DIRTY_WORKTREE");
+  const allowed = new Set(allowedDirty);
+  const dirty = splitZero(status);
+  const unexpected = dirty.filter((record) => {
+    const file = record.slice(3).replaceAll("\\", "/");
+    return record.slice(0, 2) !== " M" || !allowed.has(file);
+  });
+  if (unexpected.length > 0) {
+    throw upgradeError("Commit or discard existing project changes before upgrading the Control Plane", "DIRTY_WORKTREE");
+  }
   const tagged = splitZero((await git(target, ["ls-files", "-v", "-z"])).stdout);
   const unsafeFlags = tagged.filter((record) => !record.startsWith("H "));
   if (unsafeFlags.length > 0) {
