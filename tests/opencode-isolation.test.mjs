@@ -212,6 +212,19 @@ const toolUsage = {
   by_tool: { contract: { calls: 1, returned_bytes: 24 } },
 }
 try {
+  const validUsage = (await readFile(path.join(runtime, "valid-lockfile-usage.txt"), "utf8")).trim()
+  if (validUsage === "lockfile") {
+    toolUsage.tool_calls = 2
+    toolUsage.returned_bytes = 88
+    toolUsage.by_tool = {
+      lockfile: { calls: 1, returned_bytes: 64 },
+      contract: { calls: 1, returned_bytes: 24 },
+    }
+  }
+} catch (error) {
+  if (error?.code !== "ENOENT") throw error
+}
+try {
   const invalidUsage = (await readFile(path.join(runtime, "invalid-tool-usage.txt"), "utf8")).trim()
   if (invalidUsage === "usage-field") toolUsage.raw_output = "must not persist"
   if (invalidUsage === "counter-field") toolUsage.by_tool.contract.extra = 1
@@ -1474,6 +1487,14 @@ test("fresh launcher records bounded model usage, deduplicates identical parts, 
         cost: 0.5,
       },
     })
+    await writeFile(path.join(root, ".autopilot", "runtime", "valid-lockfile-usage.txt"), "lockfile\n", "utf8")
+    const lockfileUsage = await isolatedModule.runFreshOpenCode(
+      project,
+      "Stage: execute\nTask: M001\nAttempt: 2\n",
+      { phase: "execute", taskId: "M001", attempt: 2, baseline },
+    )
+    assert.deepEqual(lockfileUsage.tool_usage.by_tool.lockfile, { calls: 1, returned_bytes: 64 })
+    await rm(path.join(root, ".autopilot", "runtime", "valid-lockfile-usage.txt"), { force: true })
     for (const [index, mode] of ["usage-field", "counter-field", "model-field"].entries()) {
       const attempt = index + 2
       await writeFile(path.join(root, ".autopilot", "runtime", "invalid-tool-usage.txt"), `${mode}\n`, "utf8")

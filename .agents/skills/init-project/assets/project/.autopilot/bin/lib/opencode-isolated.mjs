@@ -596,7 +596,7 @@ async function readToolUsage(file, phase, taskId) {
   ) throw new AutopilotError("OpenCode phase tool usage is invalid", { code: "OPENCODE_TOOL_USAGE_INVALID" });
   for (const [name, counters] of Object.entries(value.by_tool)) {
     if (
-      !["read", "list", "search", "write", "edit", "mutate", "check", "contract"].includes(name) ||
+      !["read", "list", "search", "write", "edit", "mutate", "check", "lockfile", "contract"].includes(name) ||
       !plainObject(counters) || !hasOnlyKeys(counters, ["calls", "returned_bytes"]) ||
       !validCounter(counters.calls, value.tool_calls) ||
       !validCounter(counters.returned_bytes, value.returned_bytes)

@@ -34,8 +34,19 @@ async function invoke(root, sourceSkill, extra = [], env = undefined) {
   return run([process.execPath, upgrader, "--target", root, "--source-skill", sourceSkill, "--json", ...extra], { cwd: root, env });
 }
 
+async function createPriorScaffold(t, options = {}) {
+  const root = await createScaffold(t, options);
+  const manifestFile = path.join(root, ".autopilot", "control-plane.json");
+  const manifest = await readJson(manifestFile);
+  manifest.version = "1.6.13";
+  await writeJson(manifestFile, manifest);
+  await git(root, ["add", ".autopilot/control-plane.json"]);
+  await git(root, ["commit", "-m", "test: simulate installed 1.6.13 release"]);
+  return root;
+}
+
 test("project upgrade changes only owned framework files, validates, commits, and stays reversible", async (t) => {
-  const root = await createScaffold(t, { ready: true });
+  const root = await createPriorScaffold(t, { ready: true });
   const sourceSkill = await upgradedSkill(t);
   const configFile = path.join(root, ".autopilot", "config.json");
   const queueFile = path.join(root, ".project", "plan", "queue.json");
@@ -287,6 +298,89 @@ test("project upgrade preserves and refunds the exact v1.6.12 dependency-lock au
   assert.equal((await readJson(path.join(root, ".autopilot", "control-plane.json"))).migration_history.at(-1).recovery_reason, "v1612-dependency-lock");
 });
 
+test("project upgrade preserves and refunds the exact v1.6.13 lockfile telemetry failure", async (t) => {
+  const root = await createScaffold(t, { ready: true });
+  const sourceSkill = await upgradedSkill(t, "1.6.14");
+  const stateFile = path.join(root, ".autopilot", "state.json");
+  const queueFile = path.join(root, ".project", "plan", "queue.json");
+  const candidateFile = path.join(root, ".autopilot", "runtime", "candidate.json");
+  const manifestFile = path.join(root, ".autopilot", "control-plane.json");
+  const state = await readJson(stateFile);
+  const queue = await readJson(queueFile);
+  const manifest = await readJson(manifestFile);
+  manifest.version = "1.6.13";
+  await writeJson(manifestFile, manifest);
+  queue.tasks.M001.allowed_paths = ["package.json", "pnpm-lock.yaml", "apps"];
+  queue.tasks.M001.attempt_limit = 3;
+  await writeJson(queueFile, queue);
+  await git(root, ["add", ".autopilot/control-plane.json", ".project/plan/queue.json"]);
+  await git(root, ["commit", "-m", "test: establish lockfile telemetry recovery task"]);
+  const baseline = await git(root, ["rev-parse", "HEAD"]);
+  const blocker = {
+    kind: "gate_infrastructure",
+    message: "The controller-owned unit gate is invoking OpenCode with invalid usage, so repository behavior cannot be evaluated.",
+    required_action: "Correct the controller gate invocation; do not change repository scripts, gate definitions, or control files to mask it.",
+    resume_condition: "Resume when the approved unit gate runs its intended credential-free test command.",
+  };
+  Object.assign(state, {
+    revision: state.revision + 1,
+    run_id: "run-lockfile-telemetry-test",
+    status: "human_required",
+    phase: "blocked",
+    pid: null,
+    active_task: "M001",
+    attempt: 3,
+    baseline_head: baseline,
+    last_failure_fingerprint: "lockfile-telemetry-fingerprint",
+    last_failure_evidence: {
+      schema_version: 1,
+      failure: {
+        code: "OPENCODE_TOOL_USAGE_INVALID",
+        message: "OpenCode phase tool usage is invalid",
+      },
+    },
+    blocker,
+  });
+  queue.revision += 3;
+  queue.project_status = "blocked";
+  queue.tasks.M001.status = "blocked";
+  await writeJson(stateFile, state);
+  await writeJson(queueFile, queue);
+  await writeJson(candidateFile, {
+    schema_version: 1,
+    task_id: "M001",
+    attempt: 3,
+    status: "blocked",
+    summary: "The lockfile action completed, but controller telemetry validation rejected its counter.",
+    environment_variables: [],
+    blocker,
+  });
+  await mkdir(path.join(root, "apps"), { recursive: true });
+  await writeFile(path.join(root, "package.json"), '{"private":true,"packageManager":"pnpm@11.14.0"}\n', "utf8");
+  await writeFile(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+  await writeFile(path.join(root, "apps", "preserved.txt"), "preserved work\n", "utf8");
+
+  const preview = await invoke(root, sourceSkill, ["--dry-run"]);
+  assert.equal(preview.code, 0, preview.stderr || preview.stdout);
+  assert.equal(JSON.parse(preview.stdout).recovery_kind, "v1613-lockfile-telemetry");
+
+  const result = await invoke(root, sourceSkill);
+  assert.equal(result.code, 0, result.stderr || result.stdout);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.recovery_kind, "v1613-lockfile-telemetry");
+  assert.equal(output.recovered_active_task, "M001");
+  const recovered = await readJson(stateFile);
+  assert.equal(recovered.status, "human_required");
+  assert.equal(recovered.phase, "blocked");
+  assert.equal(recovered.active_task, "M001");
+  assert.equal(recovered.attempt, 1);
+  assert.equal(recovered.baseline_head, output.commit);
+  assert.deepEqual(recovered.blocker, blocker);
+  await assert.rejects(readFile(candidateFile), { code: "ENOENT" });
+  assert.equal(await readFile(path.join(root, "apps", "preserved.txt"), "utf8"), "preserved work\n");
+  assert.equal((await readJson(manifestFile)).migration_history.at(-1).recovery_reason, "v1613-lockfile-telemetry");
+});
+
 test("project upgrade reconnects files detached by the v1.6.11 Corepack recovery", async (t) => {
   const root = await createScaffold(t, { ready: true });
   const sourceSkill = await upgradedSkill(t, "1.6.12");
@@ -371,7 +465,7 @@ test("project upgrade reconnects files detached by the v1.6.11 Corepack recovery
 });
 
 test("project upgrade uses controller Conventional Commit identity for mapped projects", async (t) => {
-  const root = await createScaffold(t, { ready: true });
+  const root = await createPriorScaffold(t, { ready: true });
   const sourceSkill = await upgradedSkill(t);
   const configFile = path.join(root, ".autopilot", "config.json");
   const config = await readJson(configFile);
@@ -392,7 +486,7 @@ test("project upgrade uses controller Conventional Commit identity for mapped pr
 });
 
 test("project upgrade honors a schema-6 fixed commit policy", async (t) => {
-  const root = await createScaffold(t, { ready: true });
+  const root = await createPriorScaffold(t, { ready: true });
   const sourceSkill = await upgradedSkill(t);
   const configFile = path.join(root, ".autopilot", "config.json");
   const config = await readJson(configFile);
@@ -410,7 +504,7 @@ test("project upgrade honors a schema-6 fixed commit policy", async (t) => {
 });
 
 test("interview refresh restores every managed byte when post-validation parsing fails", async (t) => {
-  const root = await createScaffold(t);
+  const root = await createPriorScaffold(t);
   const sourceSkill = await upgradedSkill(t);
   const brokenValidator = path.join(
     sourceSkill,
@@ -457,7 +551,7 @@ test("project upgrade fails closed on committed managed drift before writing", a
 });
 
 test("project upgrade honors the checkout's global CRLF normalization without enabling ambient Git behavior", async (t) => {
-  const sourceProject = await createScaffold(t, { ready: true });
+  const sourceProject = await createPriorScaffold(t, { ready: true });
   const sourceSkill = await upgradedSkill(t);
   const gitHome = await mkdtemp(path.join(os.tmpdir(), "ocp-git-home-"));
   t.after(async () => rm(gitHome, { recursive: true, force: true }));
@@ -544,7 +638,7 @@ test("project upgrade refuses active controller transactions even when ignored s
 });
 
 test("project upgrade crosses only the legacy evidence-less empty-task boundary", async (t) => {
-  const root = await createScaffold(t, { ready: true, mode: "success" });
+  const root = await createPriorScaffold(t, { ready: true, mode: "success" });
   const sourceSkill = await upgradedSkill(t);
   const stateFile = path.join(root, ".autopilot", "state.json");
   const queueFile = path.join(root, ".project", "plan", "queue.json");
@@ -836,7 +930,7 @@ test("project upgrade rejects hidden Git index flags before writing", async (t) 
   const result = await invoke(root, sourceSkill);
   assert.notEqual(result.code, 0);
   assert.equal(JSON.parse(result.stderr).code, "UNSAFE_GIT_INDEX");
-  assert.equal((await readJson(path.join(root, ".autopilot", "control-plane.json"))).version, "1.6.13");
+  assert.equal((await readJson(path.join(root, ".autopilot", "control-plane.json"))).version, "1.6.14");
 });
 
 test("legacy project adoption requires explicit approval and preserves unmarked ignore content", async (t) => {

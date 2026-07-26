@@ -46,9 +46,9 @@ Blueprint and migration history belong to the cold planning path. They must not 
 
 Repository ownership and runtime placement are separate concerns. Durable product contracts and accepted evidence should remain reviewable with the project, while frequently written state, logs, locks, temporary phase contracts, and executable runtime files should move out of synchronized target repositories when this can be done without weakening recovery, portability, or rollback.
 
-## Current baseline: v1.6.13
+## Current baseline: v1.6.14
 
-Version 1.6.13 carries forward the v1.6.12 baseline and provides:
+Version 1.6.14 carries forward the v1.6.13 baseline and provides:
 
 - [x] Modular, evolving blueprints.
 - [x] Deterministic scaffolding and upgrades.
@@ -108,8 +108,22 @@ Version 1.6.13 carries forward the v1.6.12 baseline and provides:
 - [x] Task- and role-scoped exposure of that action only when both the root manifest and lockfile are approved task paths.
 - [x] Bounded diagnostics when same-session feedback runners fail before returning controller JSON.
 - [x] A guarded v1.6.12 recovery that preserves M001, removes stale candidate evidence, and refunds its dependency-tooling attempt budget.
+- [x] Complete bounded telemetry support for the controller-owned lockfile action.
+- [x] A guarded v1.6.13 recovery that preserves M001, rejects unrelated changes, removes stale candidate evidence, and restores attempt 1 after the exact lockfile-telemetry defect.
 
 The fixed-context measurement and simulated evaluation remain regression guards, not proof of end-to-end token savings or unchanged implementation quality. Controlled live trials across models are the next step before further prompt compression or reduced-review policy.
+
+## Immediate maintenance: v1.6.14 lockfile telemetry recovery (shipped)
+
+**Goal:** accept the bounded lockfile tool's own usage record and recover projects stopped by v1.6.13 without rebuilding their generated workspace.
+
+Delivered outcomes:
+
+- [x] Add `lockfile` to the exact accepted phase-tool telemetry names while retaining bounded counters and total-consistency checks.
+- [x] Reproduce the valid lockfile usage record through the fresh OpenCode phase boundary.
+- [x] Recognize only the exact exhausted v1.6.13 `OPENCODE_TOOL_USAGE_INVALID` state with matching blocker, queue, baseline, candidate, lockfile, and allowlisted application files.
+- [x] Preserve all approved M001 output, remove stale candidate evidence, advance the baseline to the reversible upgrade commit, and restore attempt 1.
+- [x] Keep all unrelated active tasks, changed control evidence, receipts, and out-of-scope files fail-closed.
 
 ## Immediate maintenance: v1.6.13 bounded dependency resolution (shipped)
 
