@@ -17,6 +17,7 @@ import {
 import {
   parseArgs as parseDashboardArgs,
   restoreTerminalInput,
+  upgradeNeedsMaintenanceDrain,
 } from "../.agents/skills/init-project/assets/project/.autopilot/bin/control-plane.mjs";
 import { createScaffold, readJson, run, writeJson } from "./runtime-helpers.mjs";
 
@@ -64,6 +65,21 @@ test("dashboard releases terminal input and identifies a fleet return", () => {
   assert.equal(parseDashboardArgs([], {
     env: { OPENCODE_CONTROL_PLANE_PARENT_DASHBOARD: "1" },
   }).returnToFleet, true);
+});
+
+test("dashboard lets the guarded updater inspect a stopped blocked task", () => {
+  assert.equal(upgradeNeedsMaintenanceDrain({
+    status: "human_required",
+    phase: "blocked",
+    active_task: "M001",
+    controller_lock: null,
+  }), false);
+  assert.equal(upgradeNeedsMaintenanceDrain({
+    status: "running",
+    phase: "executing",
+    active_task: "M001",
+    controller_lock: { pid: 7 },
+  }), true);
 });
 
 test("dashboard exposes a stopped controller's precise recovery error", async (t) => {
@@ -135,7 +151,7 @@ test("noninteractive dashboard snapshot reports version, state, and visible acti
   assert.equal(result.code, 0, result.stderr);
   const snapshot = JSON.parse(result.stdout);
   assert.equal(snapshot.status.status, "idle");
-  assert.equal(snapshot.metadata.installed_version, "1.6.15");
+  assert.equal(snapshot.metadata.installed_version, "1.6.16");
   assert.equal(snapshot.metadata.runtime_variant, "default");
   assert.equal(snapshot.actions.length, 8);
   assert.equal(snapshot.actions[0].id, "start");

@@ -46,9 +46,9 @@ Blueprint and migration history belong to the cold planning path. They must not 
 
 Repository ownership and runtime placement are separate concerns. Durable product contracts and accepted evidence should remain reviewable with the project, while frequently written state, logs, locks, temporary phase contracts, and executable runtime files should move out of synchronized target repositories when this can be done without weakening recovery, portability, or rollback.
 
-## Current baseline: v1.6.15
+## Current baseline: v1.6.16
 
-Version 1.6.15 carries forward the v1.6.14 baseline and provides:
+Version 1.6.16 carries forward the v1.6.15 baseline and provides:
 
 - [x] Modular, evolving blueprints.
 - [x] Deterministic scaffolding and upgrades.
@@ -112,8 +112,20 @@ Version 1.6.15 carries forward the v1.6.14 baseline and provides:
 - [x] A guarded v1.6.13 recovery that preserves M001, rejects unrelated changes, removes stale candidate evidence, and restores attempt 1 after the exact lockfile-telemetry defect.
 - [x] Controller-owned actions and feedback gates launch through the controller's fixed Node runtime instead of the OpenCode/Bun worker host.
 - [x] A guarded v1.6.14 recovery preserves the affected M001 workspace and restores attempt 1 after the exact runner-routing failure.
+- [x] The project dashboard sends stopped blocked tasks directly to the guarded updater instead of making their recovery unreachable behind the maintenance guard.
 
 The fixed-context measurement and simulated evaluation remain regression guards, not proof of end-to-end token savings or unchanged implementation quality. Controlled live trials across models are the next step before further prompt compression or reduced-review policy.
+
+## Immediate maintenance: v1.6.16 reachable blocked-task upgrades (shipped)
+
+**Goal:** make the existing guarded recovery reachable from the project dashboard when the worker is already stopped at a blocker.
+
+Delivered outcomes:
+
+- [x] Require maintenance draining only while a controller process is live.
+- [x] Let the guarded project updater inspect stopped blocked tasks directly.
+- [x] Preserve fail-closed updater validation for every unrecognized active task or dirty state.
+- [x] Regression-test both stopped-blocked and live-worker upgrade routing.
 
 ## Immediate maintenance: v1.6.15 controller runner routing (shipped)
 

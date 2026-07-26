@@ -197,7 +197,9 @@ async function interactive(root) {
         finally { enterScreen(); }
         model.message = "Blueprint session closed. Review the status, then resume when ready.";
       } else if (menuAction.id === "upgrade") {
-        await drainToMaintenance(root, model, draw, refresh);
+        if (upgradeNeedsMaintenanceDrain(model.status)) {
+          await drainToMaintenance(root, model, draw, refresh);
+        }
         const result = await launchProjectUpgrade(root);
         model.message = result.changed
           ? `Updated to Control Plane ${result.to_version}. Restart this dashboard, then resume.`
@@ -450,6 +452,10 @@ function fatal(error) {
 export function restoreTerminalInput(input) {
   input.setRawMode(false);
   input.pause();
+}
+
+export function upgradeNeedsMaintenanceDrain(status = {}) {
+  return Boolean(status.controller_lock);
 }
 
 export { parseArgs, readMetadata, readStatus };
