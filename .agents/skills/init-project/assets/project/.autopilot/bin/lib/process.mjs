@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, lstatSync, statSync } from "node:fs";
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -390,7 +390,27 @@ function windowsCandidates(command, cwd, env) {
   return output;
 }
 
-function resolveWindowsInvocation(argv, cwd, env) {
+function regularWindowsFile(candidate) {
+  try {
+    const info = lstatSync(candidate);
+    return info.isFile() && !info.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function resolveCorepackNodeInvocation(resolved, argv) {
+  const extension = path.extname(resolved).toLowerCase();
+  if (![".cmd", ".bat"].includes(extension)) return null;
+  if (path.basename(resolved, extension).toLowerCase() !== "corepack") return null;
+  const directory = path.dirname(resolved);
+  const node = path.join(directory, "node.exe");
+  const script = path.join(directory, "node_modules", "corepack", "dist", "corepack.js");
+  if (!regularWindowsFile(node) || !regularWindowsFile(script)) return null;
+  return { command: node, args: [script, ...argv.slice(1)] };
+}
+
+export function resolveWindowsInvocation(argv, cwd, env) {
   if (process.platform !== "win32") return { command: argv[0], args: argv.slice(1) };
   const resolved = windowsCandidates(argv[0], cwd, env).find(windowsFile);
   if (!resolved) return { command: argv[0], args: argv.slice(1) };
@@ -402,6 +422,8 @@ function resolveWindowsInvocation(argv, cwd, env) {
     ? resolved
     : `${resolved.slice(0, -extension.length)}.ps1`;
   if (!windowsFile(script)) {
+    const corepack = resolveCorepackNodeInvocation(resolved, argv);
+    if (corepack) return corepack;
     throw new AutopilotError(
       `Windows command shim ${resolved} has no matching PowerShell shim; use a native executable or an explicit node script argv`,
       { code: "WINDOWS_SHIM_UNSUPPORTED" },

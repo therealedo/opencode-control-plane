@@ -345,7 +345,7 @@ async function applyTransaction({ target, skillRoot, release, previous, candidat
       await rm(swap.stage, { force: true });
     }
     await assertCleanGit(target, {
-      allowedDirty: requiresRecoveryBaselineAdvance(recoveryBoundary)
+      allowedDirty: isActiveTaskRecovery(recoveryBoundary) || requiresRecoveryBaselineAdvance(recoveryBoundary)
         ? recoveryBoundary.allowedDirty
         : [],
     });
@@ -584,6 +584,92 @@ async function assertSafeControllerBoundary(target, state, previous) {
     };
   }
 
+  const corepackBlocker = {
+    kind: "gate_configuration",
+    message: "The authoritative gate argv resolves `corepack` to a Windows `.cmd` shim without a matching PowerShell shim; gate/control files are outside the allowed paths and may not be changed.",
+    required_action: "Update the fixed Windows gate launcher to use a native executable or invoke Corepack through an explicit Node script argv.",
+    resume_condition: "Resume once the authoritative credential-free gates can launch Corepack on Windows without the unsupported shim.",
+  };
+  const corepackAttemptLimit = Math.min(
+    Number(task?.attempt_limit ?? Number.POSITIVE_INFINITY),
+    Number((await readBoundedJson(path.join(target, ".autopilot", "config.json"), MANIFEST_BYTES))?.budgets?.max_attempts_per_task ?? Number.POSITIVE_INFINITY),
+  );
+  const exhaustedCorepackShim =
+    previous?.version === "1.6.10" &&
+    state.status === "human_required" &&
+    state.phase === "blocked" &&
+    state.pid === null &&
+    state.blocker?.kind === "gate_configuration" &&
+    JSON.stringify(state.blocker) === JSON.stringify(corepackBlocker) &&
+    state.last_failure_evidence?.failure?.code === "WINDOWS_SHIM_UNSUPPORTED" &&
+    typeof state.last_failure_evidence?.failure?.message === "string" &&
+    /\\corepack\.cmd has no matching PowerShell shim/.test(state.last_failure_evidence.failure.message) &&
+    typeof state.last_failure_fingerprint === "string" &&
+    state.last_failure_fingerprint.length > 0 &&
+    Number.isFinite(corepackAttemptLimit) && corepackAttemptLimit > 0 && attempt === corepackAttemptLimit &&
+    typeof state.baseline_head === "string" && state.baseline_head === head &&
+    queue?.project_status === "blocked" &&
+    task?.status === "blocked" &&
+    candidate?.task_id === taskId &&
+    candidate?.attempt === attempt &&
+    candidate?.status === "blocked" &&
+    JSON.stringify(candidate.blocker) === JSON.stringify(corepackBlocker);
+  if (exhaustedCorepackShim) {
+    for (const artifact of ["review.json", "mode-intent.json"]) {
+      if (await exists(path.join(target, ".autopilot", "runtime", artifact))) {
+        throw upgradeError("The Corepack recovery contains unexpected runtime evidence", "ACTIVE_TASK");
+      }
+    }
+    if (await exists(path.join(target, ".project", "receipts", `${taskId}.json`))) {
+      throw upgradeError("The Corepack recovery task already has an accepted receipt", "ACTIVE_TASK");
+    }
+    const dirtyRecords = splitZero((await git(target, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])).stdout);
+    const taskDirtyPaths = [];
+    for (const record of dirtyRecords) {
+      const status = record.slice(0, 2);
+      const file = record.slice(3).replaceAll("\\", "/");
+      if (file === queueRelative && status === " M") continue;
+      if (![" M", "??"].includes(status) || !isAllowedPath(file, task.allowed_paths)) {
+        throw upgradeError("The blocked Corepack task contains changes outside its approved task paths", "ACTIVE_TASK");
+      }
+      await assertSafeDestination(target, path.join(target, ...file.split("/")));
+      taskDirtyPaths.push(file);
+    }
+    if (taskDirtyPaths.length > 128) {
+      throw upgradeError("The blocked Corepack task has too many preserved application files", "ACTIVE_TASK");
+    }
+    const allowedDirty = [queueRelative, ...taskDirtyPaths];
+    await assertCleanGit(target, { allowedDirty });
+    const headQueueResult = await git(target, ["show", `HEAD:${queueRelative}`]);
+    if (Buffer.byteLength(headQueueResult.stdout, "utf8") > MANIFEST_BYTES) {
+      throw upgradeError("Baseline queue exceeds its recovery cap", "ACTIVE_TASK");
+    }
+    let headQueue;
+    try { headQueue = JSON.parse(headQueueResult.stdout); }
+    catch { throw upgradeError("Baseline queue is not valid JSON", "ACTIVE_TASK"); }
+    const projected = structuredClone(queue);
+    projected.revision = headQueue.revision;
+    projected.project_status = headQueue.project_status;
+    if (projected.tasks?.[taskId]) projected.tasks[taskId].status = headQueue.tasks?.[taskId]?.status;
+    if (
+      headQueue.project_status !== "ready" ||
+      headQueue.tasks?.[taskId]?.status !== "ready" ||
+      JSON.stringify(projected) !== JSON.stringify(headQueue)
+    ) throw upgradeError("The Corepack task queue contains changes beyond runtime status fields", "ACTIVE_TASK");
+    return {
+      kind: "exhausted-corepack-shim",
+      taskId,
+      attempt,
+      baselineHead: head,
+      stateRevision: Number(state.revision ?? 0),
+      blockerKind: "gate_configuration",
+      allowedDirty,
+      stateBytes: await readManagedFile(path.join(target, ".autopilot", "state.json")),
+      queueBytes: await readManagedFile(path.join(target, ".project", "plan", "queue.json")),
+      baselineQueueBytes: Buffer.from(headQueueResult.stdout, "utf8"),
+    };
+  }
+
   const affectedVersion = previous?.version &&
     compareVersions(previous.version, "1.6.3") >= 0 &&
     compareVersions(previous.version, "1.6.5") <= 0;
@@ -648,6 +734,7 @@ async function assertSafeControllerBoundary(target, state, previous) {
     attempt,
     baselineHead: head,
     stateRevision: Number(state.revision ?? 0),
+    blockerKind: "repair_exhausted",
     allowedDirty: [queueRelative],
     stateBytes,
     queueBytes,
@@ -656,7 +743,7 @@ async function assertSafeControllerBoundary(target, state, previous) {
 }
 
 function isExhaustedRecovery(boundary) {
-  return ["exhausted-empty-opencode", "exhausted-provider-auth"].includes(boundary?.kind);
+  return ["exhausted-empty-opencode", "exhausted-provider-auth", "exhausted-corepack-shim"].includes(boundary?.kind);
 }
 
 function isActiveTaskRecovery(boundary) {
@@ -700,8 +787,8 @@ async function applyExhaustedRecovery(target, boundary) {
     current.active_task !== boundary.taskId ||
     current.attempt !== boundary.attempt ||
     current.baseline_head !== boundary.baselineHead ||
-    current.blocker?.kind !== "repair_exhausted" ||
-    current.blocker?.error_code !== "OPENCODE_FAILED"
+    current.blocker?.kind !== boundary.blockerKind ||
+    (boundary.kind !== "exhausted-corepack-shim" && current.blocker?.error_code !== "OPENCODE_FAILED")
   ) throw upgradeError("Blocked task state changed during the framework upgrade", "UPGRADE_RACE");
   const next = {
     ...current,

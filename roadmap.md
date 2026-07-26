@@ -46,9 +46,9 @@ Blueprint and migration history belong to the cold planning path. They must not 
 
 Repository ownership and runtime placement are separate concerns. Durable product contracts and accepted evidence should remain reviewable with the project, while frequently written state, logs, locks, temporary phase contracts, and executable runtime files should move out of synchronized target repositories when this can be done without weakening recovery, portability, or rollback.
 
-## Current baseline: v1.6.10
+## Current baseline: v1.6.11
 
-Version 1.6.10 carries forward the v1.6.9 baseline and provides:
+Version 1.6.11 carries forward the v1.6.10 baseline and provides:
 
 - [x] Modular, evolving blueprints.
 - [x] Deterministic scaffolding and upgrades.
@@ -100,8 +100,29 @@ Version 1.6.10 carries forward the v1.6.9 baseline and provides:
 - [x] Plain text that merely mentions authentication is not accepted as recovery proof.
 - [x] Consistent literal-directory allowlist semantics across worker writes and controller validation.
 - [x] A guarded in-place upgrade bridge for the already blocked v1.6.8/v1.6.9 literal-directory task state.
+- [x] Safe Windows Corepack execution through its fixed adjacent Node entry point without executing or parsing the `.cmd` shim.
+- [x] A guarded v1.6.10 recovery that preserves allowed application work and refunds the exact exhausted Corepack-shim task.
 
 The fixed-context measurement and simulated evaluation remain regression guards, not proof of end-to-end token savings or unchanged implementation quality. Controlled live trials across models are the next step before further prompt compression or reduced-review policy.
+
+## Immediate maintenance: v1.6.11 Windows Corepack recovery (shipped)
+
+**Goal:** run fixed Corepack gates safely on Windows and recover the already exhausted task without deleting its generated workspace.
+
+Delivered outcomes:
+
+- [x] Recognize only the standard adjacent `corepack.cmd` + `node.exe` + `node_modules/corepack/dist/corepack.js` layout.
+- [x] Invoke the Corepack JavaScript entry point directly with the native Node executable; never execute or parse the command shim.
+- [x] Keep every other unsupported `.cmd` or `.bat` launcher blocked by default.
+- [x] Recognize only the exact v1.6.10 exhausted `WINDOWS_SHIM_UNSUPPORTED` gate state with matching candidate, queue, baseline, and blocker evidence.
+- [x] Preserve unstaged regular application files only when every path remains inside M001's allowlist.
+- [x] Restore the committed ready queue and attempt 0 while retaining the reversible framework-upgrade commit and migration history.
+
+Exit criteria:
+
+- [x] A Windows Corepack shim resolves to the adjacent native Node entry point.
+- [x] An unknown Windows command shim still fails closed.
+- [x] The reproduced M001 recovery keeps all generated application files and returns the task to a resumable ready state.
 
 ## Immediate maintenance: v1.6.10 blocked-task upgrade bridge (shipped)
 
@@ -272,7 +293,23 @@ Exit criteria:
 - [x] Quality and recovery failures are visible rather than averaged away.
 - [x] Product descriptions consistently distinguish policy-bounded execution from real container or VM isolation.
 
-## Milestone 2: Operational configuration
+## Planned release sequence
+
+The next minor releases have one primary architectural purpose each. Maintenance fixes may ship between them, but they must not silently pull later release scope forward.
+
+- [ ] **v1.7 — Operational profiles and OpenCode compatibility:** change how a project executes without changing product intent.
+- [ ] **v1.8 — Global runtime cache and durable state decoupling:** reduce project footprint and synchronized-worktree churn while preserving exact version pinning.
+- [ ] **v1.9 — Local-first remote control:** monitor and control the same deterministic projects from trusted devices while keeping the terminal experience complete.
+- [ ] **Separate companion project, only if required:** true phone/desktop OpenCode session mirroring when the official shared-server path cannot meet the tested synchronization contract.
+
+Evidence-gated work has no promised release number:
+
+- [ ] Risk-aware token and review policy.
+- [ ] Existing-project adoption.
+- [ ] Optional container or VM isolation.
+- [ ] Parallel tasks, richer dependency graphs, intermediate recovery checkpoints, or additional worker runtimes.
+
+## v1.7: Operational profiles and OpenCode compatibility
 
 **Goal:** let projects change models and operating policy safely without changing product intent.
 
@@ -300,7 +337,7 @@ Exit criteria:
 - [ ] A failed runtime change leaves the previous working configuration active.
 - [ ] Product architecture decisions remain distinct from execution preferences.
 
-## Milestone 3: Runtime decoupling and durable state storage
+## v1.8: Runtime decoupling and durable state storage
 
 **Goal:** reduce managed-project footprint and eliminate synchronized-repository write churn without losing version pinning, project history, or one-command upgrades.
 
@@ -325,7 +362,7 @@ Exit criteria:
 - [ ] Existing projects migrate without application-code changes, blueprint loss, manual file moves, or worker interruption outside the maintenance boundary.
 - [ ] The new layout remains dependency-free and requires no daemon, database, or background model process.
 
-## Milestone 4: Risk-aware token efficiency
+## Evidence-gated backlog: Risk-aware token efficiency
 
 **Goal:** spend model tokens in proportion to task risk while keeping deterministic checks mandatory.
 
@@ -355,7 +392,7 @@ Exit criteria:
 - [ ] Turn count, retries, false completion, and elapsed time remain visible alongside token use rather than being hidden by an aggregate.
 - [ ] Any reduced-review policy is narrow, reversible, and disabled automatically outside its proven risk class.
 
-## Milestone 5: Existing-project adoption
+## Evidence-gated backlog: Existing-project adoption
 
 **Goal:** bring an established repository under Control Plane without forcing a greenfield questionnaire or rewriting its history.
 
@@ -374,7 +411,7 @@ Exit criteria:
 - [ ] The resulting blueprint distinguishes observed facts, user-confirmed intent, and unresolved unknowns.
 - [ ] Adoption is materially shorter than new-project discovery.
 
-## Milestone 6: Optional real isolation
+## Evidence-gated backlog: Optional real isolation
 
 **Goal:** provide a stronger execution boundary for untrusted toolchains without burdening the default local workflow.
 
@@ -395,7 +432,7 @@ Exit criteria:
 - [ ] A failed or unavailable optional backend cannot silently fall back to weaker isolation.
 - [ ] Controller termination removes or deterministically reaps the backend workload within a tested bounded interval.
 
-## Milestone 7: Local-first remote control
+## v1.9: Local-first remote control
 
 **Goal:** let the user monitor and control the same Control Plane projects from a phone or another trusted device without creating a hosted service, duplicating controller state, or spending model tokens.
 
@@ -441,7 +478,7 @@ Keep the current fresh-process execution while it remains simple and reliable. C
 
 ### True multi-device OpenCode session mirroring
 
-Do not build this into Control Plane by default. First validate OpenCode's documented shared-server model with the official web interface, an attached desktop terminal, and the existing Android client. Control Plane may provide secure discovery, status, and a handoff to that one authoritative server, but it should not become a second owner of OpenCode conversations.
+This is a separate companion-project decision, not hidden v1.9 scope. First validate OpenCode's documented shared-server model with the official web interface, an attached desktop terminal, and the existing Android client. Control Plane may provide secure discovery, status, and a handoff to that one authoritative server, but it should not become a second owner of OpenCode conversations.
 
 If the official path cannot reliably synchronize reconnects, pending questions, permissions, and single-writer answers, design a separate companion project that uses OpenCode's public server API and event stream. Keep that client independently installable and versioned so mobile UI complexity cannot enlarge the controller, weaken its zero-token boundary, or disrupt existing autonomous projects.
 

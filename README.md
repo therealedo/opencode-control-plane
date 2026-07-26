@@ -129,6 +129,7 @@ Local workers are policy-bounded, not operating-system sandboxed. OpenCode and p
 - **Waiting for you:** complete the exact action shown, then Resume.
 - **OpenCode asks you to sign in again:** update to v1.6.8 or newer. The worker pauses after the first authentication failure without spending an attempt; sign in, then choose **Resume**.
 - **A project says its allowed directories are not writable:** update to v1.6.10 or newer through **Update everything**, then choose **Resume after resolving blocker**. The guarded upgrade preserves an already blocked task, and literal task directories authorize files beneath them without widening approved paths.
+- **A Windows project is blocked because `corepack.cmd` has no PowerShell shim:** update to v1.6.11 or newer through **Update everything**. The guarded recovery preserves generated project files, restores the task's attempt budget, and launches Corepack through its fixed adjacent Node entry point. Resume only after the update finishes.
 - **OpenCode failed without a useful reason:** v1.6.6 and newer retain a short sanitized diagnostic, never the raw provider output or detected credential values.
 - **Update deferred:** resolve the active blocker or dirty Git worktree, return to a safe boundary, and press U again.
 - **Managed-file drift:** do not force the update. Restore or review the named Control Plane-owned file first.
