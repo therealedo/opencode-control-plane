@@ -19,6 +19,7 @@ Control Plane will continue to own:
 - fresh implementation, repair, and review phases;
 - fixed verification gates, Git transitions, recovery, and rollback evidence;
 - the terminal fleet dashboard and safe framework upgrades;
+- an optional local-first remote control surface for the same deterministic project state and actions;
 - bounded credentials, tools, paths, outputs, and human approval boundaries.
 
 Control Plane will not become:
@@ -26,9 +27,12 @@ Control Plane will not become:
 - a general-purpose or multi-provider agent framework;
 - a model-powered manager-agent hierarchy;
 - a replacement for OpenCode's tools, sessions, providers, editor, or MCP support;
-- a cloud service, browser dashboard, Slack bot, or hosted development platform;
+- a hosted cloud service, general browser IDE, Slack bot, or development platform;
+- a replacement desktop or mobile OpenCode client;
 - a database-backed issue tracker or generic workflow language;
 - a parallel-agent system by default.
+
+Terminal-native remains the default and complete experience. Any remote surface must be an optional thin client over the same deterministic controller, add no model calls, and keep projects fully usable when it is disabled.
 
 ## Architecture boundary
 
@@ -354,6 +358,42 @@ Exit criteria:
 - [ ] A failed or unavailable optional backend cannot silently fall back to weaker isolation.
 - [ ] Controller termination removes or deterministically reaps the backend workload within a tested bounded interval.
 
+## Milestone 7: Local-first remote control
+
+**Goal:** let the user monitor and control the same Control Plane projects from a phone or another trusted device without creating a hosted service, duplicating controller state, or spending model tokens.
+
+**Status:** approved direction; implementation begins only after the single-server OpenCode compatibility test and a threat model establish a small, dependable boundary.
+
+Planned outcomes:
+
+- [ ] Define a dependency-light local supervisor interface over the existing project registry, state, and deterministic actions.
+- [ ] Keep the terminal TUI as the primary, fully capable interface; remote access remains optional and removable.
+- [ ] Provide a responsive phone interface for fleet status, project status, start, pause, resume, safe stop, upgrades, and genuine human-intervention requests.
+- [ ] Use one authoritative controller state; terminal and remote clients must never maintain competing project state.
+- [ ] Stream bounded status changes without model calls and restore authoritative state after disconnect or device sleep.
+- [ ] Require authentication and encrypted access through a trusted private network or equivalent secure transport; never advertise direct unauthenticated internet exposure.
+- [ ] Make simultaneous actions idempotent or conflict-aware so two clients cannot approve, resume, or answer the same request twice.
+- [ ] Keep credentials, raw provider output, unrestricted logs, and secrets off the remote surface.
+- [ ] Measure idle CPU, memory, package footprint, startup time, and project write churn before accepting the implementation.
+- [ ] Preserve one-command global upgrades and backwards-compatible project operation when the remote component is absent or outdated.
+
+OpenCode interoperability:
+
+- [ ] Test one authoritative `opencode web` or `opencode serve` instance with the desktop terminal attached and a phone connected to the exact same server and session.
+- [ ] Verify simultaneous message streaming, reconnect recovery, permissions, and pending single-select and multi-select questions.
+- [ ] Determine whether the currently observed frozen or missing-question behavior is caused by separate server instances, session selection, the third-party Android client, or OpenCode's server/client protocol.
+- [ ] Prefer OpenCode's official server API and event stream; do not duplicate its conversation engine or session history inside Control Plane.
+- [ ] Surface a link or handoff to the authoritative OpenCode session only if this can be done without making Control Plane responsible for editing or rendering the session.
+
+Exit criteria:
+
+- [ ] A phone and terminal can observe the same Control Plane project concurrently and receive the same blocker transition within a tested bounded interval.
+- [ ] Exactly one accepted action is recorded when both clients attempt the same transition.
+- [ ] Losing the phone connection cannot stop, duplicate, or mutate a worker.
+- [ ] Remote access can be disabled completely without affecting local projects, upgrades, or the terminal dashboard.
+- [ ] The feature adds zero model tokens to monitoring and controller actions.
+- [ ] Security documentation explains the supported network boundary and rejects unsafe public exposure.
+
 ## Conditional future work
 
 The following work is not committed. It should begin only when measurements demonstrate a concrete need.
@@ -361,6 +401,12 @@ The following work is not committed. It should begin only when measurements demo
 ### Official OpenCode SDK integration
 
 Keep the current fresh-process execution while it remains simple and reliable. Consider the official SDK or server event stream only if it materially improves structured output, cancellation, compatibility, or live status without weakening phase separation or requiring a persistent daemon.
+
+### True multi-device OpenCode session mirroring
+
+Do not build this into Control Plane by default. First validate OpenCode's documented shared-server model with the official web interface, an attached desktop terminal, and the existing Android client. Control Plane may provide secure discovery, status, and a handoff to that one authoritative server, but it should not become a second owner of OpenCode conversations.
+
+If the official path cannot reliably synchronize reconnects, pending questions, permissions, and single-writer answers, design a separate companion project that uses OpenCode's public server API and event stream. Keep that client independently installable and versioned so mobile UI complexity cannot enlarge the controller, weaken its zero-token boundary, or disrupt existing autonomous projects.
 
 ### Parallel tasks and worktrees
 
@@ -412,6 +458,8 @@ If the answer is unclear, do not add the feature yet.
 ## Research references
 
 - [OpenCode SDK](https://opencode.ai/docs/sdk/)
+- [OpenCode Server](https://opencode.ai/docs/server/)
+- [OpenCode Web](https://opencode.ai/docs/web/)
 - [Ralph](https://github.com/snarktank/ralph)
 - [Gas City](https://github.com/gastownhall/gascity) and [Beads](https://github.com/gastownhall/beads)
 - [Open SWE](https://github.com/langchain-ai/open-swe)
