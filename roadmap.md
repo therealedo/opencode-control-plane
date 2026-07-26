@@ -46,9 +46,9 @@ Blueprint and migration history belong to the cold planning path. They must not 
 
 Repository ownership and runtime placement are separate concerns. Durable product contracts and accepted evidence should remain reviewable with the project, while frequently written state, logs, locks, temporary phase contracts, and executable runtime files should move out of synchronized target repositories when this can be done without weakening recovery, portability, or rollback.
 
-## Current baseline: v1.6.11
+## Current baseline: v1.6.12
 
-Version 1.6.11 carries forward the v1.6.10 baseline and provides:
+Version 1.6.12 carries forward the v1.6.11 baseline and provides:
 
 - [x] Modular, evolving blueprints.
 - [x] Deterministic scaffolding and upgrades.
@@ -102,8 +102,29 @@ Version 1.6.11 carries forward the v1.6.10 baseline and provides:
 - [x] A guarded in-place upgrade bridge for the already blocked v1.6.8/v1.6.9 literal-directory task state.
 - [x] Safe Windows Corepack execution through its fixed adjacent Node entry point without executing or parsing the `.cmd` shim.
 - [x] A guarded v1.6.10 recovery that preserves allowed application work and refunds the exact exhausted Corepack-shim task.
+- [x] Active-task continuity for Corepack recovery so preserved files remain M001 work instead of becoming unrelated dirty files.
+- [x] A guarded bridge that repairs the exact v1.6.11 detached-file recovery state without deleting or rebuilding application work.
 
 The fixed-context measurement and simulated evaluation remain regression guards, not proof of end-to-end token savings or unchanged implementation quality. Controlled live trials across models are the next step before further prompt compression or reduced-review policy.
+
+## Immediate maintenance: v1.6.12 Corepack task continuity (shipped)
+
+**Goal:** reconnect application files preserved by v1.6.11 to M001 so strict validation can resume the task safely.
+
+Delivered outcomes:
+
+- [x] Keep the Corepack recovery as an active blocked task instead of resetting it to an unrelated clean-start boundary.
+- [x] Advance the active task baseline to the reversible framework-upgrade commit.
+- [x] Preserve one productive attempt and refund the framework-caused retries, leaving two bounded phases available.
+- [x] Remove stale phase-candidate evidence before the next fresh execution.
+- [x] Recognize and repair only the exact v1.6.11 `exhausted-corepack-shim` migration state with a committed ready queue and allowlisted preserved files.
+- [x] Refuse out-of-bound files, changed queues, unexpected phase evidence, receipts, or mismatched migration history.
+
+Exit criteria:
+
+- [x] Direct v1.6.10 recovery remains active at M001 attempt 1 with its generated files preserved.
+- [x] The reproduced v1.6.11 detached-file state upgrades to v1.6.12 and reconnects M001 without rebuilding.
+- [x] Resume can pass strict validation and continue from the preserved workspace.
 
 ## Immediate maintenance: v1.6.11 Windows Corepack recovery (shipped)
 

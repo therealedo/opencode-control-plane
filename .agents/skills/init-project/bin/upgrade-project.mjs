@@ -38,6 +38,12 @@ import { controllerCommitMessage } from "../assets/project/.autopilot/bin/lib/co
 const PROCESS_TIMEOUT_MS = 10 * 60_000;
 const PROCESS_OUTPUT_BYTES = 1024 * 1024;
 const MANIFEST_BYTES = 512 * 1024;
+const COREPACK_BLOCKER = Object.freeze({
+  kind: "gate_configuration",
+  message: "The authoritative gate argv resolves `corepack` to a Windows `.cmd` shim without a matching PowerShell shim; gate/control files are outside the allowed paths and may not be changed.",
+  required_action: "Update the fixed Windows gate launcher to use a native executable or invoke Corepack through an explicit Node script argv.",
+  resume_condition: "Resume once the authoritative credential-free gates can launch Corepack on Windows without the unsupported shim.",
+});
 const args = parseArgs(process.argv.slice(2));
 const defaultSkillRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -275,7 +281,10 @@ async function applyTransaction({ target, skillRoot, release, previous, candidat
     await performSwaps(swaps);
     if (await exists(path.join(target, "control-plane"))) await chmod(path.join(target, "control-plane"), 0o755);
 
-    if (isExhaustedRecovery(recoveryBoundary)) {
+    if (["exhausted-corepack-shim", "v1611-corepack-reset-repair"].includes(recoveryBoundary?.kind)) {
+      await applyCorepackActiveRecovery(target, recoveryBoundary);
+      recoveryApplied = true;
+    } else if (isExhaustedRecovery(recoveryBoundary)) {
       await applyExhaustedRecovery(target, recoveryBoundary);
       recoveryApplied = true;
     }
@@ -360,6 +369,9 @@ async function applyTransaction({ target, skillRoot, release, previous, candidat
       try {
         await atomicWriteFile(path.join(target, ".autopilot", "state.json"), recoveryBoundary.stateBytes);
         await atomicWriteFile(path.join(target, ".project", "plan", "queue.json"), recoveryBoundary.queueBytes);
+        if (recoveryBoundary.candidateBytes) {
+          await atomicWriteFile(path.join(target, ".autopilot", "runtime", "candidate.json"), recoveryBoundary.candidateBytes);
+        }
         recoveryApplied = false;
       } catch (rollbackError) {
         rollbackErrors.push(`exhausted task recovery: ${rollbackError.message}`);
@@ -469,6 +481,8 @@ async function assertSafeControllerBoundary(target, state, previous) {
   }
   if (state.completion) throw upgradeError("A task completion transaction is unfinished", "ACTIVE_TRANSACTION");
   if (state.finalization) throw upgradeError("A project finalization transaction is unfinished", "ACTIVE_TRANSACTION");
+  const resetCorepackBoundary = await detectResetCorepackBoundary(target, state, previous);
+  if (resetCorepackBoundary) return resetCorepackBoundary;
   if (!state.active_task) return null;
 
   const taskId = state.active_task;
@@ -499,6 +513,7 @@ async function assertSafeControllerBoundary(target, state, previous) {
       taskId,
       attempt,
       baselineHead: head,
+      currentHead: head,
       stateRevision: Number(state.revision ?? 0),
       blockerKind: "insufficient_evidence",
       allowedDirty: [queueRelative],
@@ -584,12 +599,6 @@ async function assertSafeControllerBoundary(target, state, previous) {
     };
   }
 
-  const corepackBlocker = {
-    kind: "gate_configuration",
-    message: "The authoritative gate argv resolves `corepack` to a Windows `.cmd` shim without a matching PowerShell shim; gate/control files are outside the allowed paths and may not be changed.",
-    required_action: "Update the fixed Windows gate launcher to use a native executable or invoke Corepack through an explicit Node script argv.",
-    resume_condition: "Resume once the authoritative credential-free gates can launch Corepack on Windows without the unsupported shim.",
-  };
   const corepackAttemptLimit = Math.min(
     Number(task?.attempt_limit ?? Number.POSITIVE_INFINITY),
     Number((await readBoundedJson(path.join(target, ".autopilot", "config.json"), MANIFEST_BYTES))?.budgets?.max_attempts_per_task ?? Number.POSITIVE_INFINITY),
@@ -600,7 +609,7 @@ async function assertSafeControllerBoundary(target, state, previous) {
     state.phase === "blocked" &&
     state.pid === null &&
     state.blocker?.kind === "gate_configuration" &&
-    JSON.stringify(state.blocker) === JSON.stringify(corepackBlocker) &&
+    JSON.stringify(state.blocker) === JSON.stringify(COREPACK_BLOCKER) &&
     state.last_failure_evidence?.failure?.code === "WINDOWS_SHIM_UNSUPPORTED" &&
     typeof state.last_failure_evidence?.failure?.message === "string" &&
     /\\corepack\.cmd has no matching PowerShell shim/.test(state.last_failure_evidence.failure.message) &&
@@ -613,7 +622,7 @@ async function assertSafeControllerBoundary(target, state, previous) {
     candidate?.task_id === taskId &&
     candidate?.attempt === attempt &&
     candidate?.status === "blocked" &&
-    JSON.stringify(candidate.blocker) === JSON.stringify(corepackBlocker);
+    JSON.stringify(candidate.blocker) === JSON.stringify(COREPACK_BLOCKER);
   if (exhaustedCorepackShim) {
     for (const artifact of ["review.json", "mode-intent.json"]) {
       if (await exists(path.join(target, ".autopilot", "runtime", artifact))) {
@@ -661,11 +670,14 @@ async function assertSafeControllerBoundary(target, state, previous) {
       taskId,
       attempt,
       baselineHead: head,
+      currentHead: head,
       stateRevision: Number(state.revision ?? 0),
       blockerKind: "gate_configuration",
+      recoveryAttempt: 1,
       allowedDirty,
       stateBytes: await readManagedFile(path.join(target, ".autopilot", "state.json")),
       queueBytes: await readManagedFile(path.join(target, ".project", "plan", "queue.json")),
+      candidateBytes: await readManagedFile(path.join(target, ".autopilot", "runtime", "candidate.json")),
       baselineQueueBytes: Buffer.from(headQueueResult.stdout, "utf8"),
     };
   }
@@ -742,16 +754,113 @@ async function assertSafeControllerBoundary(target, state, previous) {
   };
 }
 
+async function detectResetCorepackBoundary(target, state, previous) {
+  const migration = previous?.migration_history?.at?.(-1);
+  if (
+    previous?.version !== "1.6.11" ||
+    migration?.from_version !== "1.6.10" ||
+    migration?.to_version !== "1.6.11" ||
+    migration?.kind !== "upgrade-recovery" ||
+    migration?.recovery_reason !== "exhausted-corepack-shim" ||
+    typeof migration?.recovered_task !== "string" ||
+    state.status !== "paused" ||
+    state.phase !== "maintenance" ||
+    state.pid !== null ||
+    state.active_task !== null ||
+    Number(state.attempt ?? -1) !== 0 ||
+    state.blocker !== null ||
+    state.last_failure_fingerprint !== null ||
+    state.last_failure_evidence !== null ||
+    typeof state.baseline_head !== "string" ||
+    !/^[0-9a-f]{40,64}$/i.test(state.baseline_head)
+  ) return null;
+
+  const taskId = migration.recovered_task;
+  const queueRelative = ".project/plan/queue.json";
+  const queueFile = path.join(target, ...queueRelative.split("/"));
+  const candidateFile = path.join(target, ".autopilot", "runtime", "candidate.json");
+  const queue = await readBoundedJson(queueFile, MANIFEST_BYTES);
+  const candidate = await readBoundedJson(candidateFile, 64 * 1024, { optional: true });
+  const task = queue?.tasks?.[taskId];
+  if (
+    queue?.project_status !== "ready" ||
+    task?.status !== "ready" ||
+    !Array.isArray(task?.allowed_paths) ||
+    candidate?.task_id !== taskId ||
+    candidate?.status !== "blocked" ||
+    JSON.stringify(candidate?.blocker) !== JSON.stringify(COREPACK_BLOCKER)
+  ) return null;
+  for (const artifact of ["review.json", "mode-intent.json"]) {
+    if (await exists(path.join(target, ".autopilot", "runtime", artifact))) {
+      throw upgradeError("The reset Corepack recovery contains unexpected runtime evidence", "ACTIVE_TASK");
+    }
+  }
+  if (await exists(path.join(target, ".project", "receipts", `${taskId}.json`))) {
+    throw upgradeError("The reset Corepack recovery task already has an accepted receipt", "ACTIVE_TASK");
+  }
+  const head = (await git(target, ["rev-parse", "HEAD"])).stdout.trim();
+  const headQueueResult = await git(target, ["show", `HEAD:${queueRelative}`]);
+  if (Buffer.byteLength(headQueueResult.stdout, "utf8") > MANIFEST_BYTES) {
+    throw upgradeError("Baseline queue exceeds its recovery cap", "ACTIVE_TASK");
+  }
+  let headQueue;
+  try { headQueue = JSON.parse(headQueueResult.stdout); }
+  catch { throw upgradeError("Baseline queue is not valid JSON", "ACTIVE_TASK"); }
+  if (JSON.stringify(queue) !== JSON.stringify(headQueue)) {
+    throw upgradeError("The reset Corepack queue differs from the committed ready queue", "ACTIVE_TASK");
+  }
+
+  const dirtyRecords = splitZero((await git(target, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])).stdout);
+  const taskDirtyPaths = [];
+  for (const record of dirtyRecords) {
+    const status = record.slice(0, 2);
+    const file = record.slice(3).replaceAll("\\", "/");
+    if (![" M", "??"].includes(status) || !isAllowedPath(file, task.allowed_paths)) {
+      throw upgradeError("The reset Corepack task contains changes outside its approved task paths", "ACTIVE_TASK");
+    }
+    await assertSafeDestination(target, path.join(target, ...file.split("/")));
+    taskDirtyPaths.push(file);
+  }
+  if (taskDirtyPaths.length === 0 || taskDirtyPaths.length > 128) {
+    throw upgradeError("The reset Corepack task has an invalid preserved application-file count", "ACTIVE_TASK");
+  }
+  const allowedDirty = [queueRelative, ...taskDirtyPaths];
+  await assertCleanGit(target, { allowedDirty });
+  return {
+    kind: "v1611-corepack-reset-repair",
+    taskId,
+    attempt: 0,
+    recoveryAttempt: 1,
+    baselineHead: state.baseline_head,
+    currentHead: head,
+    stateRevision: Number(state.revision ?? 0),
+    blockerKind: null,
+    allowedDirty,
+    stateBytes: await readManagedFile(path.join(target, ".autopilot", "state.json")),
+    queueBytes: await readManagedFile(queueFile),
+    candidateBytes: await readManagedFile(candidateFile),
+  };
+}
+
 function isExhaustedRecovery(boundary) {
-  return ["exhausted-empty-opencode", "exhausted-provider-auth", "exhausted-corepack-shim"].includes(boundary?.kind);
+  return ["exhausted-empty-opencode", "exhausted-provider-auth"].includes(boundary?.kind);
 }
 
 function isActiveTaskRecovery(boundary) {
-  return isExhaustedRecovery(boundary) || boundary?.kind === "literal-directory-path-boundary";
+  return isExhaustedRecovery(boundary) || [
+    "literal-directory-path-boundary",
+    "exhausted-corepack-shim",
+    "v1611-corepack-reset-repair",
+  ].includes(boundary?.kind);
 }
 
 function requiresRecoveryBaselineAdvance(boundary) {
-  return ["legacy-insufficient-evidence", "literal-directory-path-boundary"].includes(boundary?.kind);
+  return [
+    "legacy-insufficient-evidence",
+    "literal-directory-path-boundary",
+    "exhausted-corepack-shim",
+    "v1611-corepack-reset-repair",
+  ].includes(boundary?.kind);
 }
 
 function hasRetainedProviderAuthFailure(state) {
@@ -821,17 +930,88 @@ async function applyExhaustedRecovery(target, boundary) {
   await atomicWriteFile(stateFile, contents);
 }
 
+async function applyCorepackActiveRecovery(target, boundary) {
+  const stateFile = path.join(target, ".autopilot", "state.json");
+  const queueFile = path.join(target, ".project", "plan", "queue.json");
+  const candidateFile = path.join(target, ".autopilot", "runtime", "candidate.json");
+  const [current, queue, candidate] = await Promise.all([
+    readBoundedJson(stateFile, 64 * 1024),
+    readBoundedJson(queueFile, MANIFEST_BYTES),
+    readBoundedJson(candidateFile, 64 * 1024),
+  ]);
+  const originalBlocked = boundary.kind === "exhausted-corepack-shim";
+  const stateMatches = originalBlocked
+    ? current.revision === boundary.stateRevision &&
+      current.status === "human_required" && current.phase === "blocked" &&
+      current.pid === null && current.active_task === boundary.taskId &&
+      current.attempt === boundary.attempt && current.baseline_head === boundary.baselineHead &&
+      JSON.stringify(current.blocker) === JSON.stringify(COREPACK_BLOCKER)
+    : current.revision === boundary.stateRevision &&
+      current.status === "paused" && current.phase === "maintenance" &&
+      current.pid === null && current.active_task === null && current.attempt === 0 &&
+      current.baseline_head === boundary.baselineHead && current.blocker === null;
+  if (
+    !stateMatches ||
+    candidate?.task_id !== boundary.taskId ||
+    candidate?.status !== "blocked" ||
+    JSON.stringify(candidate?.blocker) !== JSON.stringify(COREPACK_BLOCKER) ||
+    !queue?.tasks?.[boundary.taskId]
+  ) throw upgradeError("Corepack recovery state changed during the framework upgrade", "UPGRADE_RACE");
+
+  const nextQueue = structuredClone(queue);
+  if (nextQueue.project_status !== "blocked" || nextQueue.tasks[boundary.taskId].status !== "blocked") {
+    nextQueue.revision = Number(nextQueue.revision ?? 0) + 1;
+    nextQueue.project_status = "blocked";
+    nextQueue.tasks[boundary.taskId].status = "blocked";
+  }
+  const nextState = {
+    ...current,
+    revision: Number(current.revision ?? 0) + 1,
+    run_id: null,
+    status: "human_required",
+    phase: "blocked",
+    pid: null,
+    started_at: null,
+    heartbeat_at: new Date().toISOString(),
+    active_task: boundary.taskId,
+    attempt: boundary.recoveryAttempt,
+    no_progress_count: 0,
+    last_progress_hash: null,
+    last_failure_fingerprint: null,
+    last_failure_evidence: null,
+    last_session: null,
+    session_ids: [],
+    baseline_head: boundary.currentHead,
+    blocker: COREPACK_BLOCKER,
+    completion: null,
+    finalization: null,
+  };
+  const stateContents = `${JSON.stringify(nextState, null, 2)}\n`;
+  const queueContents = `${JSON.stringify(nextQueue, null, 2)}\n`;
+  if (Buffer.byteLength(stateContents, "utf8") > 64 * 1024 || Buffer.byteLength(queueContents, "utf8") > MANIFEST_BYTES) {
+    throw upgradeError("Corepack recovery state exceeds its bounded capacity", "STATE_CAPACITY_EXHAUSTED");
+  }
+  await atomicWriteFile(queueFile, queueContents);
+  await atomicWriteFile(stateFile, stateContents);
+  await rm(candidateFile, { force: true });
+}
+
 async function advanceRecoveryBaseline(target, boundary, commit) {
   const stateFile = path.join(target, ".autopilot", "state.json");
   const state = await readBoundedJson(stateFile, 64 * 1024);
+  const corepackRecovery = ["exhausted-corepack-shim", "v1611-corepack-reset-repair"].includes(boundary.kind);
+  const expectedRevision = corepackRecovery ? boundary.stateRevision + 1 : boundary.stateRevision;
+  const expectedAttempt = corepackRecovery ? boundary.recoveryAttempt : boundary.attempt;
+  const expectedBaseline = corepackRecovery ? boundary.currentHead : boundary.baselineHead;
+  const expectedBlocker = corepackRecovery ? "gate_configuration" : boundary.blockerKind;
   if (
-    state.revision !== boundary.stateRevision ||
+    state.revision !== expectedRevision ||
     state.status !== "human_required" ||
     state.phase !== "blocked" ||
     state.active_task !== boundary.taskId ||
-    state.attempt !== boundary.attempt ||
-    state.baseline_head !== boundary.baselineHead ||
-    state.blocker?.kind !== boundary.blockerKind
+    state.attempt !== expectedAttempt ||
+    state.baseline_head !== expectedBaseline ||
+    state.blocker?.kind !== expectedBlocker
   ) throw upgradeError("Blocked task state changed during the framework upgrade", "UPGRADE_RACE");
   const next = {
     ...state,
