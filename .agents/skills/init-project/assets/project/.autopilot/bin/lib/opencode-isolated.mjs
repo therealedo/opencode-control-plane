@@ -1400,6 +1400,7 @@ async function prepareSterilePhase(project, {
     max_feedback_calls: phase !== "review" && Object.keys(feedbackGates).length > 0
       ? MAX_FEEDBACK_CALLS
       : 0,
+    controller_node_argv: [process.execPath],
     git_argv: gitArgv,
   };
   const isolatedConfig = {

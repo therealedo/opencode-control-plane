@@ -46,9 +46,9 @@ Blueprint and migration history belong to the cold planning path. They must not 
 
 Repository ownership and runtime placement are separate concerns. Durable product contracts and accepted evidence should remain reviewable with the project, while frequently written state, logs, locks, temporary phase contracts, and executable runtime files should move out of synchronized target repositories when this can be done without weakening recovery, portability, or rollback.
 
-## Current baseline: v1.6.14
+## Current baseline: v1.6.15
 
-Version 1.6.14 carries forward the v1.6.13 baseline and provides:
+Version 1.6.15 carries forward the v1.6.14 baseline and provides:
 
 - [x] Modular, evolving blueprints.
 - [x] Deterministic scaffolding and upgrades.
@@ -110,8 +110,22 @@ Version 1.6.14 carries forward the v1.6.13 baseline and provides:
 - [x] A guarded v1.6.12 recovery that preserves M001, removes stale candidate evidence, and refunds its dependency-tooling attempt budget.
 - [x] Complete bounded telemetry support for the controller-owned lockfile action.
 - [x] A guarded v1.6.13 recovery that preserves M001, rejects unrelated changes, removes stale candidate evidence, and restores attempt 1 after the exact lockfile-telemetry defect.
+- [x] Controller-owned actions and feedback gates launch through the controller's fixed Node runtime instead of the OpenCode/Bun worker host.
+- [x] A guarded v1.6.14 recovery preserves the affected M001 workspace and restores attempt 1 after the exact runner-routing failure.
 
 The fixed-context measurement and simulated evaluation remain regression guards, not proof of end-to-end token savings or unchanged implementation quality. Controlled live trials across models are the next step before further prompt compression or reduced-review policy.
+
+## Immediate maintenance: v1.6.15 controller runner routing (shipped)
+
+**Goal:** route controller-owned scripts through the controller's trusted Node executable even when OpenCode hosts custom tools under Bun or another runtime.
+
+Delivered outcomes:
+
+- [x] Bind one absolute controller Node argv into every sterile phase policy.
+- [x] Use that argv for both the pnpm lockfile action and bounded feedback-gate runner.
+- [x] Regression-test the indirection through an explicit controller Node proxy.
+- [x] Recognize only the exact v1.6.14 controller-tooling blocker with matching queue, baseline, candidate, lockfile, and allowlisted application files.
+- [x] Preserve M001, remove stale candidate evidence, advance the baseline, and restore attempt 1 without rebuilding the project.
 
 ## Immediate maintenance: v1.6.14 lockfile telemetry recovery (shipped)
 

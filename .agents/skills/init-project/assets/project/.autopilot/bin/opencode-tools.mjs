@@ -125,6 +125,11 @@ const policy = (() => {
       !path.isAbsolute(value.usage_path) ||
       value.usage_path.includes("\0")
     )) ||
+    !Array.isArray(value.controller_node_argv) || value.controller_node_argv.length < 1 || value.controller_node_argv.length > 8 ||
+    !path.isAbsolute(value.controller_node_argv[0] ?? "") ||
+    value.controller_node_argv.some((argument) =>
+      typeof argument !== "string" || !argument || /[\0\r\n]/.test(argument)
+    ) ||
     !Array.isArray(value.git_argv) || value.git_argv.length < 1 || value.git_argv.length > 8 ||
     !path.isAbsolute(value.git_argv[0] ?? "") ||
     value.git_argv.some((argument) =>
@@ -140,6 +145,7 @@ const policy = (() => {
     feedback_runner: path.resolve(value.feedback_runner),
     action_runner: path.resolve(value.action_runner),
     feedback_gates: normalizedFeedbackGates,
+    controller_node_argv: Object.freeze([...value.controller_node_argv]),
     git_argv: Object.freeze([...value.git_argv]),
   })
 })()
@@ -1087,8 +1093,9 @@ export const lockfile = defineTool({
     }
     if (contractCommitted) throw new Error("Dependency actions are unavailable after the phase contract")
     await beginTool("lockfile")
-    const execution = spawnSync(process.execPath, [
-      policy.action_runner, "dependency-lock", "--root", policy.root,
+    const execution = spawnSync(policy.controller_node_argv[0], [
+      ...policy.controller_node_argv.slice(1), policy.action_runner,
+      "dependency-lock", "--root", policy.root,
     ], {
       cwd: policy.root,
       encoding: "utf8",
@@ -1124,8 +1131,8 @@ export const check = defineTool({
     if (policy.phase === "review") throw new Error("autopilot_check is unavailable to the reviewer")
     await beginTool("check")
     const gate = policy.feedback_gates[gateId]
-    const execution = spawnSync(process.execPath, [
-      policy.feedback_runner,
+    const execution = spawnSync(policy.controller_node_argv[0], [
+      ...policy.controller_node_argv.slice(1), policy.feedback_runner,
       gateId,
       "--root", policy.root,
       "--task", policy.task_id,

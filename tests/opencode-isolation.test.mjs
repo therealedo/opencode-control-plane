@@ -624,6 +624,7 @@ test("controller-owned tools exclude ignored content and reject unsafe file iden
     allow_dependency_lock: false,
     feedback_gates: {},
     max_feedback_calls: 0,
+    controller_node_argv: [process.execPath],
     git_argv: await trustedGitArgv(root),
   }), "utf8").toString("base64")
   t.after(() => {
@@ -810,6 +811,7 @@ test("typed phase contracts derive identity and leave Git evidence to the contro
       allow_dependency_lock: false,
       feedback_gates: {},
       max_feedback_calls: 0,
+      controller_node_argv: [process.execPath],
       git_argv: gitArgv,
     }), "utf8").toString("base64")
   }
@@ -981,6 +983,7 @@ test("autopilot_check returns bounded gate feedback and enforces the two-call ph
       task: { definition_sha256: definitionSha256, timeout_seconds: gates.gates.task.timeout_seconds },
     },
     max_feedback_calls: 2,
+    controller_node_argv: [process.execPath],
     git_argv: await trustedGitArgv(root),
   }), "utf8").toString("base64")
   t.after(() => {
@@ -1013,12 +1016,22 @@ test("autopilot_lockfile runs one controller-owned dependency action and enforce
   t.after(() => rm(profile, { recursive: true, force: true }))
   const copiedTool = path.join(profile, "autopilot.mjs")
   const actionRunner = path.join(profile, "action-runner.mjs")
+  const nodeProxy = path.join(profile, "controller-node-proxy.mjs")
+  const proxyMarker = path.join(profile, "controller-node-proxy.used")
   await copyFile(path.join(root, ".autopilot", "bin", "opencode-tools.mjs"), copiedTool)
   await writeFile(actionRunner, `process.stdout.write(JSON.stringify({
     action: "dependency-lock", package_manager: "pnpm@11.14.0", success: true,
     code: 0, timed_out: false, duration_ms: 12,
     diagnostic: { stdout: "resolved", stderr: "", output_truncated: false }
   }) + "\\n")\n`, "utf8")
+  await writeFile(nodeProxy, `import { spawnSync } from "node:child_process"
+import { writeFileSync } from "node:fs"
+writeFileSync(${JSON.stringify(proxyMarker)}, "used\\n")
+const result = spawnSync(process.execPath, process.argv.slice(2), { encoding: "utf8", windowsHide: true })
+process.stdout.write(result.stdout || "")
+process.stderr.write(result.stderr || "")
+process.exit(result.status ?? 1)
+`, "utf8")
   const usageFile = path.join(profile, "tool-usage.json")
   const previousPolicy = process.env.AUTOPILOT_TOOL_POLICY
   process.env.AUTOPILOT_TOOL_POLICY = Buffer.from(JSON.stringify({
@@ -1029,7 +1042,8 @@ test("autopilot_lockfile runs one controller-owned dependency action and enforce
     max_returned_bytes: 32768, usage_path: usageFile,
     feedback_runner: path.join(root, ".autopilot", "bin", "run-gate.mjs"),
     action_runner: actionRunner, allow_dependency_lock: true,
-    feedback_gates: {}, max_feedback_calls: 0, git_argv: await trustedGitArgv(root),
+    feedback_gates: {}, max_feedback_calls: 0,
+    controller_node_argv: [process.execPath, nodeProxy], git_argv: await trustedGitArgv(root),
   }), "utf8").toString("base64")
   t.after(() => {
     if (previousPolicy === undefined) delete process.env.AUTOPILOT_TOOL_POLICY
@@ -1039,6 +1053,7 @@ test("autopilot_lockfile runs one controller-owned dependency action and enforce
   const result = JSON.parse(await tools.lockfile.execute({}))
   assert.equal(result.success, true)
   assert.equal(result.package_manager, "pnpm@11.14.0")
+  assert.equal(await readFile(proxyMarker, "utf8"), "used\n")
   await assert.rejects(tools.lockfile.execute({}), /limited to one call/)
   assert.deepEqual((await readJson(usageFile)).by_tool.lockfile.calls, 1)
 })

@@ -66,6 +66,7 @@ test("literal allowed directories authorize descendant worker writes only", asyn
     allow_dependency_lock: false,
     feedback_gates: {},
     max_feedback_calls: 0,
+    controller_node_argv: [process.execPath],
     git_argv: await trustedGitArgv(root),
   }), "utf8").toString("base64")
 

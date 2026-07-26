@@ -56,6 +56,12 @@ const LOCKFILE_TELEMETRY_BLOCKER = Object.freeze({
   required_action: "Correct the controller gate invocation; do not change repository scripts, gate definitions, or control files to mask it.",
   resume_condition: "Resume when the approved unit gate runs its intended credential-free test command.",
 });
+const CONTROLLER_RUNNER_BLOCKER = Object.freeze({
+  kind: "controller_tooling",
+  message: "Credential-free controller actions are unavailable/misrouted; pnpm-lock.yaml remains without resolved package snapshots, so frozen-install and required gate evidence cannot be produced safely.",
+  required_action: "Restore the controller-owned pnpm lockfile resolver and gate runner, then rerun this phase.",
+  resume_condition: "autopilot_lockfile can generate a complete pnpm 11.14.0 workspace lockfile and the listed gates execute their repository scripts.",
+});
 const args = parseArgs(process.argv.slice(2));
 const defaultSkillRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -293,7 +299,7 @@ async function applyTransaction({ target, skillRoot, release, previous, candidat
     await performSwaps(swaps);
     if (await exists(path.join(target, "control-plane"))) await chmod(path.join(target, "control-plane"), 0o755);
 
-    if (["exhausted-corepack-shim", "v1611-corepack-reset-repair", "v1612-dependency-lock", "v1613-lockfile-telemetry"].includes(recoveryBoundary?.kind)) {
+    if (["exhausted-corepack-shim", "v1611-corepack-reset-repair", "v1612-dependency-lock", "v1613-lockfile-telemetry", "v1614-controller-runner"].includes(recoveryBoundary?.kind)) {
       await applyCorepackActiveRecovery(target, recoveryBoundary);
       recoveryApplied = true;
     } else if (isExhaustedRecovery(recoveryBoundary)) {
@@ -826,6 +832,68 @@ async function assertSafeControllerBoundary(target, state, previous) {
     };
   }
 
+  const controllerRunnerBoundary =
+    previous?.version === "1.6.14" &&
+    state.status === "human_required" && state.phase === "blocked" && state.pid === null &&
+    JSON.stringify(state.blocker) === JSON.stringify(CONTROLLER_RUNNER_BLOCKER) &&
+    state.last_failure_fingerprint === null && state.last_failure_evidence === null &&
+    attempt === 2 && typeof state.baseline_head === "string" && state.baseline_head === head &&
+    queue?.project_status === "blocked" && task?.status === "blocked" &&
+    candidate?.task_id === taskId && candidate?.attempt === attempt && candidate?.status === "blocked" &&
+    JSON.stringify(candidate.blocker) === JSON.stringify(CONTROLLER_RUNNER_BLOCKER) &&
+    Array.isArray(task?.allowed_paths) &&
+    isAllowedPath("package.json", task.allowed_paths) && isAllowedPath("pnpm-lock.yaml", task.allowed_paths);
+  if (controllerRunnerBoundary) {
+    for (const artifact of ["review.json", "mode-intent.json"]) {
+      if (await exists(path.join(target, ".autopilot", "runtime", artifact))) {
+        throw upgradeError("The controller-runner recovery contains unexpected runtime evidence", "ACTIVE_TASK");
+      }
+    }
+    if (await exists(path.join(target, ".project", "receipts", `${taskId}.json`))) {
+      throw upgradeError("The controller-runner recovery task already has an accepted receipt", "ACTIVE_TASK");
+    }
+    const dirtyRecords = splitZero((await git(target, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])).stdout);
+    const taskDirtyPaths = [];
+    for (const record of dirtyRecords) {
+      const status = record.slice(0, 2);
+      const file = record.slice(3).replaceAll("\\", "/");
+      if (file === queueRelative && status === " M") continue;
+      if (![" M", "??"].includes(status) || !isAllowedPath(file, task.allowed_paths)) {
+        throw upgradeError("The controller-runner recovery contains changes outside its approved task paths", "ACTIVE_TASK");
+      }
+      await assertSafeDestination(target, path.join(target, ...file.split("/")));
+      taskDirtyPaths.push(file);
+    }
+    if (!taskDirtyPaths.includes("pnpm-lock.yaml") || taskDirtyPaths.length > 256) {
+      throw upgradeError("The controller-runner recovery does not contain the expected bounded workspace output", "ACTIVE_TASK");
+    }
+    const allowedDirty = [queueRelative, ...taskDirtyPaths];
+    await assertCleanGit(target, { allowedDirty });
+    const headQueueResult = await git(target, ["show", `HEAD:${queueRelative}`]);
+    if (Buffer.byteLength(headQueueResult.stdout, "utf8") > MANIFEST_BYTES) {
+      throw upgradeError("Baseline queue exceeds its recovery cap", "ACTIVE_TASK");
+    }
+    let headQueue;
+    try { headQueue = JSON.parse(headQueueResult.stdout); }
+    catch { throw upgradeError("Baseline queue is not valid JSON", "ACTIVE_TASK"); }
+    const projected = structuredClone(queue);
+    projected.revision = headQueue.revision;
+    projected.project_status = headQueue.project_status;
+    if (projected.tasks?.[taskId]) projected.tasks[taskId].status = headQueue.tasks?.[taskId]?.status;
+    if (
+      headQueue.project_status !== "ready" || headQueue.tasks?.[taskId]?.status !== "ready" ||
+      JSON.stringify(projected) !== JSON.stringify(headQueue)
+    ) throw upgradeError("The controller-runner queue contains changes beyond runtime status fields", "ACTIVE_TASK");
+    return {
+      kind: "v1614-controller-runner", taskId, attempt, recoveryAttempt: 1,
+      baselineHead: head, currentHead: head, stateRevision: Number(state.revision ?? 0),
+      blockerKind: "controller_tooling", blocker: CONTROLLER_RUNNER_BLOCKER, allowedDirty,
+      stateBytes: await readManagedFile(path.join(target, ".autopilot", "state.json")),
+      queueBytes: await readManagedFile(path.join(target, ".project", "plan", "queue.json")),
+      candidateBytes: await readManagedFile(path.join(target, ".autopilot", "runtime", "candidate.json")),
+    };
+  }
+
   const affectedVersion = previous?.version &&
     compareVersions(previous.version, "1.6.3") >= 0 &&
     compareVersions(previous.version, "1.6.5") <= 0;
@@ -997,6 +1065,7 @@ function isActiveTaskRecovery(boundary) {
     "v1611-corepack-reset-repair",
     "v1612-dependency-lock",
     "v1613-lockfile-telemetry",
+    "v1614-controller-runner",
   ].includes(boundary?.kind);
 }
 
@@ -1008,6 +1077,7 @@ function requiresRecoveryBaselineAdvance(boundary) {
     "v1611-corepack-reset-repair",
     "v1612-dependency-lock",
     "v1613-lockfile-telemetry",
+    "v1614-controller-runner",
   ].includes(boundary?.kind);
 }
 
@@ -1087,10 +1157,12 @@ async function applyCorepackActiveRecovery(target, boundary) {
     readBoundedJson(queueFile, MANIFEST_BYTES),
     readBoundedJson(candidateFile, 64 * 1024),
   ]);
-  const originalBlocked = ["exhausted-corepack-shim", "v1612-dependency-lock", "v1613-lockfile-telemetry"].includes(boundary.kind);
+  const originalBlocked = ["exhausted-corepack-shim", "v1612-dependency-lock", "v1613-lockfile-telemetry", "v1614-controller-runner"].includes(boundary.kind);
   const expectedBlocker = boundary.kind === "v1612-dependency-lock"
     ? DEPENDENCY_LOCK_BLOCKER
-    : boundary.kind === "v1613-lockfile-telemetry" ? LOCKFILE_TELEMETRY_BLOCKER : COREPACK_BLOCKER;
+    : boundary.kind === "v1613-lockfile-telemetry"
+      ? LOCKFILE_TELEMETRY_BLOCKER
+      : boundary.kind === "v1614-controller-runner" ? CONTROLLER_RUNNER_BLOCKER : COREPACK_BLOCKER;
   const stateMatches = originalBlocked
     ? current.revision === boundary.stateRevision &&
       current.status === "human_required" && current.phase === "blocked" &&
@@ -1150,7 +1222,7 @@ async function applyCorepackActiveRecovery(target, boundary) {
 async function advanceRecoveryBaseline(target, boundary, commit) {
   const stateFile = path.join(target, ".autopilot", "state.json");
   const state = await readBoundedJson(stateFile, 64 * 1024);
-  const corepackRecovery = ["exhausted-corepack-shim", "v1611-corepack-reset-repair", "v1612-dependency-lock", "v1613-lockfile-telemetry"].includes(boundary.kind);
+  const corepackRecovery = ["exhausted-corepack-shim", "v1611-corepack-reset-repair", "v1612-dependency-lock", "v1613-lockfile-telemetry", "v1614-controller-runner"].includes(boundary.kind);
   const expectedRevision = corepackRecovery ? boundary.stateRevision + 1 : boundary.stateRevision;
   const expectedAttempt = corepackRecovery ? boundary.recoveryAttempt : boundary.attempt;
   const expectedBaseline = corepackRecovery ? boundary.currentHead : boundary.baselineHead;
@@ -1158,6 +1230,8 @@ async function advanceRecoveryBaseline(target, boundary, commit) {
     ? "tooling_authority"
     : boundary.kind === "v1613-lockfile-telemetry"
       ? "gate_infrastructure"
+      : boundary.kind === "v1614-controller-runner"
+        ? "controller_tooling"
       : corepackRecovery ? "gate_configuration" : boundary.blockerKind;
   if (
     state.revision !== expectedRevision ||
