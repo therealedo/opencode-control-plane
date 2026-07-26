@@ -15,7 +15,7 @@ import {
 
 const upgrader = path.join(repositoryRoot, ".agents", "skills", "init-project", "bin", "upgrade-project.mjs");
 
-async function upgradedSkill(t, version = "1.6.17") {
+async function upgradedSkill(t, version = "1.6.18") {
   const parent = await mkdtemp(path.join(os.tmpdir(), "ocp-release-fixture-"));
   t.after(async () => rm(parent, { recursive: true, force: true }));
   const skills = path.join(repositoryRoot, ".agents", "skills");
@@ -58,14 +58,14 @@ test("project upgrade changes only owned framework files, validates, commits, an
   const output = JSON.parse(result.stdout);
   assert.equal(output.changed, true);
   assert.equal(output.from_version, "1.6.14");
-  assert.equal(output.to_version, "1.6.17");
+  assert.equal(output.to_version, "1.6.18");
   assert.match(output.commit, /^[0-9a-f]{40,64}$/);
   assert.match(output.rollback, /^git revert /);
   assert.deepEqual(await readFile(configFile), beforeConfig);
   assert.deepEqual(await readFile(queueFile), beforeQueue);
   assert.match(await readFile(path.join(root, "AGENTS.md"), "utf8"), /release fixture 1\.6\.15/);
   const manifest = await readJson(path.join(root, ".autopilot", "control-plane.json"));
-  assert.equal(manifest.version, "1.6.17");
+  assert.equal(manifest.version, "1.6.18");
   assert.equal(manifest.migration_history.at(-1).kind, "upgrade");
   assert.equal(await git(root, ["status", "--porcelain=v1", "--untracked-files=all"]), "");
   assert.match(await git(root, ["log", "-1", "--pretty=%s"]), /control-plane: upgrade 1\.6\.14 to 1\.6\.15/);
@@ -468,6 +468,107 @@ test("project upgrade preserves and refunds the exact v1.6.14 controller-runner 
   assert.equal((await readJson(manifestFile)).migration_history.at(-1).recovery_reason, "v1614-controller-runner");
 });
 
+test("project upgrade preserves and refunds the exact v1.6.17 gate-cleanup failure", async (t) => {
+  const root = await createScaffold(t, { ready: true });
+  const sourceSkill = await upgradedSkill(t);
+  const stateFile = path.join(root, ".autopilot", "state.json");
+  const queueFile = path.join(root, ".project", "plan", "queue.json");
+  const candidateFile = path.join(root, ".autopilot", "runtime", "candidate.json");
+  const manifestFile = path.join(root, ".autopilot", "control-plane.json");
+  const state = await readJson(stateFile);
+  const queue = await readJson(queueFile);
+  const manifest = await readJson(manifestFile);
+  manifest.version = "1.6.17";
+  queue.tasks.M001.allowed_paths = ["package.json", "pnpm-lock.yaml", "apps"];
+  await writeJson(manifestFile, manifest);
+  await writeJson(queueFile, queue);
+  await git(root, ["add", ".autopilot/control-plane.json", ".project/plan/queue.json"]);
+  await git(root, ["commit", "-m", "test: establish gate-cleanup recovery task"]);
+  const baseline = await git(root, ["rev-parse", "HEAD"]);
+  const blocker = {
+    kind: "environment",
+    message: "The controller gate runner reports GATE_CLEANUP_FAILED before gate execution.",
+    required_action: "Repair or clear the controller-owned gate sandbox/cleanup state, then start a fresh repair attempt.",
+    resume_condition: "Credential-free gates can execute and return application diagnostics.",
+  };
+  Object.assign(state, {
+    revision: state.revision + 1,
+    run_id: "run-gate-cleanup-test",
+    status: "human_required",
+    phase: "blocked",
+    pid: null,
+    active_task: "M001",
+    attempt: 3,
+    baseline_head: baseline,
+    last_failure_fingerprint: "gate-cleanup-fingerprint",
+    last_failure_evidence: {
+      schema_version: 1,
+      failure: {
+        code: "OPENCODE_TOOL_USAGE_INVALID",
+        message: "OpenCode phase tool usage is invalid",
+      },
+    },
+    task_tool_usage: {
+      "execute:a2": {
+        schema_version: 1,
+        phase: "execute",
+        task_id: "M001",
+        tool_calls: 2,
+        returned_bytes: 12,
+        by_tool: {
+          read: { calls: 1, returned_bytes: 12 },
+          lockfile: { calls: 1, returned_bytes: 0 },
+        },
+      },
+      "repair:a3": {
+        schema_version: 1,
+        phase: "repair",
+        task_id: "M001",
+        tool_calls: 1,
+        returned_bytes: 8,
+        by_tool: { check: { calls: 1, returned_bytes: 8 } },
+      },
+    },
+    blocker,
+  });
+  queue.revision += 3;
+  queue.project_status = "blocked";
+  queue.tasks.M001.status = "blocked";
+  await writeJson(stateFile, state);
+  await writeJson(queueFile, queue);
+  await writeJson(candidateFile, {
+    schema_version: 1,
+    task_id: "M001",
+    attempt: 3,
+    status: "blocked",
+    summary: "Controller gate cleanup failed before the feedback gate could return diagnostics.",
+    environment_variables: [],
+    blocker,
+  });
+  await mkdir(path.join(root, "apps"), { recursive: true });
+  await writeFile(path.join(root, "package.json"), '{"private":true,"packageManager":"pnpm@11.14.0"}\n', "utf8");
+  await writeFile(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+  await writeFile(path.join(root, "apps", "preserved.txt"), "preserved work\n", "utf8");
+
+  const preview = await invoke(root, sourceSkill, ["--dry-run"]);
+  assert.equal(preview.code, 0, preview.stderr || preview.stdout);
+  assert.equal(JSON.parse(preview.stdout).recovery_kind, "v1617-gate-cleanup");
+  const result = await invoke(root, sourceSkill);
+  assert.equal(result.code, 0, result.stderr || result.stdout);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.recovery_kind, "v1617-gate-cleanup");
+  const recovered = await readJson(stateFile);
+  assert.equal(recovered.status, "human_required");
+  assert.equal(recovered.active_task, "M001");
+  assert.equal(recovered.attempt, 1);
+  assert.equal(recovered.baseline_head, output.commit);
+  assert.deepEqual(recovered.blocker, blocker);
+  assert.deepEqual(recovered.task_tool_usage, state.task_tool_usage);
+  await assert.rejects(readFile(candidateFile), { code: "ENOENT" });
+  assert.equal(await readFile(path.join(root, "apps", "preserved.txt"), "utf8"), "preserved work\n");
+  assert.equal((await readJson(manifestFile)).migration_history.at(-1).recovery_reason, "v1617-gate-cleanup");
+});
+
 test("project upgrade reconnects files detached by the v1.6.11 Corepack recovery", async (t) => {
   const root = await createScaffold(t, { ready: true });
   const sourceSkill = await upgradedSkill(t, "1.6.12");
@@ -567,7 +668,7 @@ test("project upgrade uses controller Conventional Commit identity for mapped pr
   assert.equal(result.code, 0, result.stderr || result.stdout);
   assert.equal(
     await git(root, ["log", "-1", "--pretty=%s"]),
-    "chore(control-plane): upgrade 1.6.14 to 1.6.17",
+    "chore(control-plane): upgrade 1.6.14 to 1.6.18",
   );
   assert.deepEqual(await readJson(configFile), config);
 });
@@ -586,7 +687,7 @@ test("project upgrade honors a schema-6 fixed commit policy", async (t) => {
 
   const result = await invoke(root, sourceSkill);
   assert.equal(result.code, 0, result.stderr || result.stdout);
-  assert.equal(await git(root, ["log", "-1", "--pretty=%s"]), "chore: upgrade 1.6.14 to 1.6.17");
+  assert.equal(await git(root, ["log", "-1", "--pretty=%s"]), "chore: upgrade 1.6.14 to 1.6.18");
   assert.deepEqual(await readJson(configFile), config);
 });
 
@@ -663,7 +764,7 @@ test("project upgrade honors the checkout's global CRLF normalization without en
 
   const result = await invoke(root, sourceSkill, [], environment);
   assert.equal(result.code, 0, result.stderr || result.stdout);
-  assert.equal(JSON.parse(result.stdout).to_version, "1.6.17");
+  assert.equal(JSON.parse(result.stdout).to_version, "1.6.18");
 });
 
 test("legacy CRLF projects adopt without rebuilding or rewriting project-owned context", async (t) => {
@@ -703,7 +804,7 @@ test("legacy CRLF projects adopt without rebuilding or rewriting project-owned c
   assert.equal(result.code, 0, result.stderr || result.stdout);
   const output = JSON.parse(result.stdout);
   assert.equal(output.adopted_legacy_project, true);
-  assert.equal((await readJson(path.join(root, ".autopilot", "control-plane.json"))).version, "1.6.17");
+  assert.equal((await readJson(path.join(root, ".autopilot", "control-plane.json"))).version, "1.6.18");
   assert.match(await readFile(path.join(root, ".gitattributes"), "utf8"), /Control Plane-owned text/);
   const finalStatus = await run(["git", "status", "--porcelain=v1", "--untracked-files=all"], { cwd: root, env: environment });
   assert.equal(finalStatus.stdout, "", finalStatus.stderr || finalStatus.stdout);
@@ -1017,7 +1118,7 @@ test("project upgrade rejects hidden Git index flags before writing", async (t) 
   const result = await invoke(root, sourceSkill);
   assert.notEqual(result.code, 0);
   assert.equal(JSON.parse(result.stderr).code, "UNSAFE_GIT_INDEX");
-  assert.equal((await readJson(path.join(root, ".autopilot", "control-plane.json"))).version, "1.6.17");
+  assert.equal((await readJson(path.join(root, ".autopilot", "control-plane.json"))).version, "1.6.18");
 });
 
 test("legacy project adoption requires explicit approval and preserves unmarked ignore content", async (t) => {

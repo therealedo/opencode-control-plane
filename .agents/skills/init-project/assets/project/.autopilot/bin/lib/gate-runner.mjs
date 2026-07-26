@@ -39,6 +39,12 @@ const GATE_TEMP_RUNTIME_MAX_CANDIDATES = 64;
 const GATE_OUTPUT_SECRET_MAX_VALUES = 128;
 const GATE_OUTPUT_SECRET_MAX_BYTES = 64 * 1024;
 const GATE_INJECTED_ENV_MAX_BYTES = 16 * 1024;
+export const GATE_CLEANUP_OPTIONS = Object.freeze({
+  recursive: true,
+  force: true,
+  maxRetries: 10,
+  retryDelay: 100,
+});
 
 function foldedPath(value) {
   const resolved = path.resolve(value);
@@ -160,7 +166,7 @@ async function assertSafeStaleGateTree(root, directory, counter, depth = 0) {
 async function removePrivateGateRuntime(project, directory) {
   const target = await assertPrivateGateRuntime(project, directory);
   await assertSafeStaleGateTree(target, target, { count: 0 });
-  await rm(target, { recursive: true, force: true });
+  await rm(target, GATE_CLEANUP_OPTIONS);
 }
 
 export async function sweepStaleGateRuntimes(project) {

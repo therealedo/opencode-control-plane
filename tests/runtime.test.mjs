@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 import { setTimeout as delay } from "node:timers/promises"
+import { GATE_CLEANUP_OPTIONS } from "../.agents/skills/init-project/assets/project/.autopilot/bin/lib/gate-runner.mjs"
 
 import {
   createScaffold,
@@ -16,6 +17,15 @@ import {
 } from "./runtime-helpers.mjs"
 
 const REUSE_FLAGS = new Set(["--continue", "-c", "--session", "-s", "--fork"])
+
+test("gate cleanup retries transient Windows filesystem locks within a fixed bound", () => {
+  assert.deepEqual(GATE_CLEANUP_OPTIONS, {
+    recursive: true,
+    force: true,
+    maxRetries: 10,
+    retryDelay: 100,
+  })
+})
 
 async function runAutopilot(root, command = "start", env = undefined) {
   return run(

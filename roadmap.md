@@ -46,9 +46,9 @@ Blueprint and migration history belong to the cold planning path. They must not 
 
 Repository ownership and runtime placement are separate concerns. Durable product contracts and accepted evidence should remain reviewable with the project, while frequently written state, logs, locks, temporary phase contracts, and executable runtime files should move out of synchronized target repositories when this can be done without weakening recovery, portability, or rollback.
 
-## Current baseline: v1.6.17
+## Current baseline: v1.6.18
 
-Version 1.6.17 carries forward the v1.6.16 baseline and provides:
+Version 1.6.18 carries forward the v1.6.17 baseline and provides:
 
 - [x] Modular, evolving blueprints.
 - [x] Deterministic scaffolding and upgrades.
@@ -114,8 +114,20 @@ Version 1.6.17 carries forward the v1.6.16 baseline and provides:
 - [x] A guarded v1.6.14 recovery preserves the affected M001 workspace and restores attempt 1 after the exact runner-routing failure.
 - [x] The project dashboard sends stopped blocked tasks directly to the guarded updater instead of making their recovery unreachable behind the maintenance guard.
 - [x] Durable phase-usage validation accepts the controller-owned lockfile action, allowing the guarded recovery to retain its real usage audit through post-upgrade validation.
+- [x] Gate cleanup uses bounded native retries for transient Windows file locks, with an exact v1.6.17 recovery that restores the affected M001 attempt budget.
 
 The fixed-context measurement and simulated evaluation remain regression guards, not proof of end-to-end token savings or unchanged implementation quality. Controlled live trials across models are the next step before further prompt compression or reduced-review policy.
+
+## Immediate maintenance: v1.6.18 Windows gate cleanup recovery (shipped)
+
+**Goal:** keep short-lived Windows filesystem locks from turning controller-owned cleanup into an exhausted application task.
+
+Delivered outcomes:
+
+- [x] Retry `EBUSY`, `EMFILE`, `ENFILE`, `ENOTEMPTY`, and `EPERM` cleanup failures with Node's bounded linear-backoff removal.
+- [x] Retain the existing private-directory, link, owner, depth, entry-count, and location checks before removal.
+- [x] Recognize only the exact exhausted v1.6.17 `GATE_CLEANUP_FAILED` state with matching candidate, queue, baseline, receipt absence, and allowlisted workspace files.
+- [x] Preserve M001 and its usage audit, remove stale candidate evidence, advance the baseline, and restore attempt 1.
 
 ## Immediate maintenance: v1.6.17 lockfile usage validation (shipped)
 
