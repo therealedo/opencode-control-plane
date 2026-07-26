@@ -11,6 +11,7 @@ permission:
   autopilot_list: allow
   autopilot_search: allow
   autopilot_mutate: deny
+  autopilot_lockfile: deny
   autopilot_check: deny
   autopilot_contract: allow
   read: deny

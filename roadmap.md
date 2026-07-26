@@ -46,9 +46,9 @@ Blueprint and migration history belong to the cold planning path. They must not 
 
 Repository ownership and runtime placement are separate concerns. Durable product contracts and accepted evidence should remain reviewable with the project, while frequently written state, logs, locks, temporary phase contracts, and executable runtime files should move out of synchronized target repositories when this can be done without weakening recovery, portability, or rollback.
 
-## Current baseline: v1.6.12
+## Current baseline: v1.6.13
 
-Version 1.6.12 carries forward the v1.6.11 baseline and provides:
+Version 1.6.13 carries forward the v1.6.12 baseline and provides:
 
 - [x] Modular, evolving blueprints.
 - [x] Deterministic scaffolding and upgrades.
@@ -104,8 +104,31 @@ Version 1.6.12 carries forward the v1.6.11 baseline and provides:
 - [x] A guarded v1.6.10 recovery that preserves allowed application work and refunds the exact exhausted Corepack-shim task.
 - [x] Active-task continuity for Corepack recovery so preserved files remain M001 work instead of becoming unrelated dirty files.
 - [x] A guarded bridge that repairs the exact v1.6.11 detached-file recovery state without deleting or rebuilding application work.
+- [x] A single-use controller-owned pnpm lockfile action that disables lifecycle scripts and pnpmfile hooks and strips phase credentials.
+- [x] Task- and role-scoped exposure of that action only when both the root manifest and lockfile are approved task paths.
+- [x] Bounded diagnostics when same-session feedback runners fail before returning controller JSON.
+- [x] A guarded v1.6.12 recovery that preserves M001, removes stale candidate evidence, and refunds its dependency-tooling attempt budget.
 
 The fixed-context measurement and simulated evaluation remain regression guards, not proof of end-to-end token savings or unchanged implementation quality. Controlled live trials across models are the next step before further prompt compression or reduced-review policy.
+
+## Immediate maintenance: v1.6.13 bounded dependency resolution (shipped)
+
+**Goal:** let a worker complete an exactly pinned pnpm workspace lockfile without granting arbitrary shell access or requiring manual project repair.
+
+Delivered outcomes:
+
+- [x] Expose one fixed `pnpm install --lockfile-only` action only to eligible implementation and repair phases.
+- [x] Disable package scripts and pnpmfile hooks, isolate user configuration, reject credential-bearing project `.npmrc` entries, and cap time/output.
+- [x] Keep dependency resolution unavailable to independent review and limit it to one call per phase.
+- [x] Return bounded actionable feedback when the ordinary feedback runner fails to produce controller JSON.
+- [x] Recognize only the exact v1.6.12 M001 dependency-lock blocker with its unchanged queue, baseline, candidate, and allowlisted workspace files.
+- [x] Preserve those files, advance the task baseline to the reversible upgrade commit, remove stale candidate evidence, and restore attempt 1.
+
+Exit criteria:
+
+- [x] Unsafe npm configuration is rejected before Corepack launches.
+- [x] The dependency action and its one-call phase cap are regression tested without network access.
+- [x] The reproduced v1.6.12 blocked task upgrades in place without deleting or rebuilding product work.
 
 ## Immediate maintenance: v1.6.12 Corepack task continuity (shipped)
 

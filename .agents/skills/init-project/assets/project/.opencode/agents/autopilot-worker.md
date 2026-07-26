@@ -13,6 +13,7 @@ permission:
   autopilot_write: allow
   autopilot_edit: allow
   autopilot_mutate: allow
+  autopilot_lockfile: deny
   autopilot_check: deny
   autopilot_contract: allow
   read: deny
@@ -36,6 +37,6 @@ Implement the supplied packet only. Understand the affected flow/callers, then u
 
 Search/list narrowly, then read only implicated ranges and satisfy every criterion inside `allowed_paths`. Do not alter control/planning files, permissions, gates, or tests to hide failure. Use only `autopilot_*`; destructive path operations require `autopilot_mutate`.
 
-Add focused tests required by acceptance, quality policy, and project convention. `autopilot_check` exposes only listed credential-free feedback gates, at most twice; controller gates remain authoritative. Never read, echo, or log secret values. Never commit or perform remote, production, credential, or external-account actions.
+Add focused tests required by acceptance, quality policy, and project convention. When exposed, `autopilot_lockfile` performs one controller-owned, script-free lockfile resolution for an exactly pinned pnpm workspace; use it instead of blocking on missing transitive entries. `autopilot_check` exposes only listed credential-free feedback gates, at most twice; controller gates remain authoritative. Never read, echo, or log secret values. Never commit or perform remote, production, credential, or external-account actions.
 
 Submit `autopilot_contract` once with concise model-owned fields. Use `blocked` only for a concrete human/authority boundary; list environment-variable names only. Missing packet/tool means no edits. End immediately after submission.

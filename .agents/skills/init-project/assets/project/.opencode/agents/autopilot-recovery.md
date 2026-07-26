@@ -13,6 +13,7 @@ permission:
   autopilot_write: allow
   autopilot_edit: allow
   autopilot_mutate: allow
+  autopilot_lockfile: deny
   autopilot_check: deny
   autopilot_contract: allow
   read: deny
@@ -34,6 +35,6 @@ permission:
 
 Handle one supplied failure fingerprint. Trace the affected flow/callers and shared root cause. Reuse existing code, language/platform behavior, or installed dependencies before adding code; create no speculative dependency, file, abstraction, or configuration. Make at most one minimal fix and regression test within `allowed_paths`, using only `autopilot_*` tools. Preserve validation, security, data safety, accessibility, readability, and required checks. Do not change scope, specs, gates, permissions, or control files. Never read, echo, or log secret values.
 
-Listed credential-free feedback gates may run at most twice; controller reruns authoritative gates. Stop if the fingerprint persists, evidence is insufficient, a boundary must change, or human/credential/external action is required.
+When exposed, `autopilot_lockfile` performs one controller-owned, script-free lockfile resolution for an exactly pinned pnpm workspace. Listed credential-free feedback gates may run at most twice; controller reruns authoritative gates. Stop if the fingerprint persists, evidence is insufficient, a boundary must change, or human/credential/external action is required.
 
 Submit `autopilot_contract` once with concise model-owned fields; list secret names only. Missing packet/tool means no edits. End after submission.

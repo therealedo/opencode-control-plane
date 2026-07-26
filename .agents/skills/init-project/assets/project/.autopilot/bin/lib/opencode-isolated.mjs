@@ -13,7 +13,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { atomicWriteFile, assertPrivateFile, AutopilotError, normalizeRelative, sha256, stableJson, truncateUtf8 } from "./core.mjs";
+import { atomicWriteFile, assertPrivateFile, AutopilotError, isAllowedPath, normalizeRelative, sha256, stableJson, truncateUtf8 } from "./core.mjs";
 import {
   assertCredentialInputsUnchanged,
   credentialEnvironmentForScope,
@@ -50,6 +50,7 @@ const FAILURE_DIAGNOSTIC_BYTES = 4096;
 const TERMINAL_ESCAPE_PATTERN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-_])/g;
 const GATE_RUNNER_SNAPSHOT = Object.freeze([
   "run-gate.mjs",
+  "run-action.mjs",
   "process-guard.mjs",
   "windows-job-guard.ps1",
   "lib/commit-policy.mjs",
@@ -516,15 +517,19 @@ function feedbackGatePolicy(task, gates, phase) {
   return selected;
 }
 
-function renderFeedbackToolPermission(agentText, allowed) {
-  const expression = /^  autopilot_check: (?:allow|deny)$/gm;
-  const matches = [...agentText.matchAll(expression)];
-  if (matches.length !== 1) {
-    throw new AutopilotError("Phase role must declare exactly one autopilot_check permission", {
-      code: "PROJECT_INVALID",
-    });
+function renderControllerToolPermissions(agentText, permissions) {
+  let rendered = agentText;
+  for (const [tool, allowed] of Object.entries(permissions)) {
+    const expression = new RegExp(`^  ${tool}: (?:allow|deny)$`, "gm");
+    const matches = [...rendered.matchAll(expression)];
+    if (matches.length !== 1) {
+      throw new AutopilotError(`Phase role must declare exactly one ${tool} permission`, {
+        code: "PROJECT_INVALID",
+      });
+    }
+    rendered = rendered.replace(expression, `  ${tool}: ${allowed ? "allow" : "deny"}`);
   }
-  return agentText.replace(expression, `  autopilot_check: ${allowed ? "allow" : "deny"}`);
+  return rendered;
 }
 
 function validateLocalMcpEnvironment(server, serverName, providerNames) {
@@ -1105,13 +1110,19 @@ export async function preflightFreshOpenCode(project, {
   ]);
   const agentText = await readFile(agentSource, "utf8");
   const feedbackGates = feedbackGatePolicy(resolved.task, resolved.gates, phase);
-  const effectiveAgent = renderFeedbackToolPermission(
+  const allowDependencyLock = phase !== "review" &&
+    isAllowedPath("package.json", resolved.task.allowed_paths) &&
+    isAllowedPath("pnpm-lock.yaml", resolved.task.allowed_paths);
+  const effectiveAgent = renderControllerToolPermissions(
     renderManagedToolBlock(
       agentText,
       resolved.capabilities.grants,
       resolved.capabilities.role,
     ),
-    Object.keys(feedbackGates).length > 0,
+    {
+      autopilot_check: Object.keys(feedbackGates).length > 0,
+      autopilot_lockfile: allowDependencyLock,
+    },
   );
   const localCommands = await validateSelectedMcp(
     project,
@@ -1137,6 +1148,7 @@ export async function preflightFreshOpenCode(project, {
     toolSource,
     effectiveAgent,
     feedbackGates,
+    allowDependencyLock,
     openCodeCommand: trustedCommand.command,
     executionEnvironment: trustedCommand.environment,
     localCommands,
@@ -1268,6 +1280,7 @@ async function prepareSterilePhase(project, {
   selectedMcpAuth,
   secrets,
   feedbackGates,
+  allowDependencyLock,
 }) {
   const settings = project.config.opencode;
 
@@ -1306,6 +1319,7 @@ async function prepareSterilePhase(project, {
     copyFile(toolSource, path.join(tools, "autopilot.js")),
   ]);
   const feedbackRunner = await snapshotGateRunner(project, sterile);
+  const actionRunner = path.join(path.dirname(feedbackRunner), "run-action.mjs");
 
   const secretFiles = new Map();
   for (const [name, value] of Object.entries(credentials.environment)) {
@@ -1380,6 +1394,8 @@ async function prepareSterilePhase(project, {
     max_returned_bytes: PHASE_TOOL_RETURNED_BYTES,
     usage_path: usageFile,
     feedback_runner: feedbackRunner,
+    action_runner: actionRunner,
+    allow_dependency_lock: allowDependencyLock,
     feedback_gates: feedbackGates,
     max_feedback_calls: phase !== "review" && Object.keys(feedbackGates).length > 0
       ? MAX_FEEDBACK_CALLS

@@ -61,6 +61,7 @@ const MAX_SEARCH_RESULTS = 100
 const DEFAULT_PHASE_RETURNED_BYTES = 64 * 1024
 const CONTRACT_RETURN_RESERVE = 2 * 1024
 const MAX_FEEDBACK_CALLS = 2
+const MAX_LOCKFILE_CALLS = 1
 const MAX_MODE_INTENTS = 64
 const MAX_PATH_INPUT_BYTES = 4096
 const MAX_CURSOR = MAX_SEARCH_BYTES
@@ -109,6 +110,10 @@ const policy = (() => {
     typeof value.feedback_runner !== "string" ||
     !path.isAbsolute(value.feedback_runner) ||
     value.feedback_runner.includes("\0") ||
+    typeof value.action_runner !== "string" ||
+    !path.isAbsolute(value.action_runner) ||
+    value.action_runner.includes("\0") ||
+    typeof value.allow_dependency_lock !== "boolean" ||
     !Number.isSafeInteger(value.max_feedback_calls) ||
     value.max_feedback_calls < 0 || value.max_feedback_calls > MAX_FEEDBACK_CALLS ||
     (value.phase === "review" && (
@@ -133,6 +138,7 @@ const policy = (() => {
     max_returned_bytes: maxReturnedBytes,
     usage_path: value.usage_path ? path.resolve(value.usage_path) : null,
     feedback_runner: path.resolve(value.feedback_runner),
+    action_runner: path.resolve(value.action_runner),
     feedback_gates: normalizedFeedbackGates,
     git_argv: Object.freeze([...value.git_argv]),
   })
@@ -591,6 +597,9 @@ async function beginTool(name) {
   if (name === "check" && (usage.by_tool.check?.calls ?? 0) >= policy.max_feedback_calls) {
     throw new Error(`autopilot_check is limited to ${policy.max_feedback_calls} calls in this phase`)
   }
+  if (name === "lockfile" && (usage.by_tool.lockfile?.calls ?? 0) >= MAX_LOCKFILE_CALLS) {
+    throw new Error("autopilot_lockfile is limited to one call in this phase")
+  }
   usage.tool_calls += 1
   usage.by_tool[name] ??= { calls: 0, returned_bytes: 0 }
   usage.by_tool[name].calls += 1
@@ -1042,6 +1051,65 @@ function conciseFeedbackResult(value, gateId, definitionSha256) {
   return result
 }
 
+function conciseActionResult(value) {
+  if (
+    !value || typeof value !== "object" || Array.isArray(value) ||
+    value.action !== "dependency-lock" ||
+    typeof value.package_manager !== "string" || !/^pnpm@\d+\.\d+\.\d+$/.test(value.package_manager) ||
+    typeof value.success !== "boolean" ||
+    (value.code !== null && !Number.isInteger(value.code)) ||
+    typeof value.timed_out !== "boolean" ||
+    !Number.isSafeInteger(value.duration_ms) || value.duration_ms < 0 ||
+    !value.diagnostic || typeof value.diagnostic !== "object" || Array.isArray(value.diagnostic)
+  ) throw new Error("Dependency action returned an invalid controller result")
+  return {
+    action: value.action,
+    package_manager: value.package_manager,
+    success: value.success,
+    code: value.code,
+    timed_out: value.timed_out,
+    duration_ms: value.duration_ms,
+    diagnostic: {
+      stdout: utf8Prefix(typeof value.diagnostic.stdout === "string" ? value.diagnostic.stdout : "", 2048),
+      stderr: utf8Prefix(typeof value.diagnostic.stderr === "string" ? value.diagnostic.stderr : "", 2048),
+      output_truncated: Boolean(value.diagnostic.output_truncated),
+    },
+  }
+}
+
+export const lockfile = defineTool({
+  description: "Resolve one exactly pinned pnpm workspace lockfile without running package scripts or using credentials.",
+  args: {},
+  async execute(args) {
+    exactKeys(args, [], "lockfile input")
+    if (!policy.allow_dependency_lock || policy.phase === "review") {
+      throw new Error("autopilot_lockfile is not approved for this task phase")
+    }
+    if (contractCommitted) throw new Error("Dependency actions are unavailable after the phase contract")
+    await beginTool("lockfile")
+    const execution = spawnSync(process.execPath, [
+      policy.action_runner, "dependency-lock", "--root", policy.root,
+    ], {
+      cwd: policy.root,
+      encoding: "utf8",
+      env: feedbackRunnerEnvironment(),
+      windowsHide: true,
+      shell: false,
+      maxBuffer: 128 * 1024,
+      timeout: 11 * 60 * 1000,
+    })
+    if (execution.error) throw new Error("Dependency action failed to start or exceeded its outer time bound")
+    let parsed
+    try { parsed = JSON.parse(execution.stdout) }
+    catch { throw new Error("Dependency action did not return bounded controller JSON") }
+    const result = conciseActionResult(parsed)
+    if ((result.success && execution.status !== 0) || (!result.success && execution.status !== 1)) {
+      throw new Error("Dependency action exit status disagrees with its result")
+    }
+    return await returned("lockfile", JSON.stringify(result))
+  },
+})
+
 export const check = defineTool({
   description: "Run one approved credential-free feedback gate. The controller reruns authoritative gates.",
   args: { gate_id: schema.string() },
@@ -1073,10 +1141,30 @@ export const check = defineTool({
       maxBuffer: 128 * 1024,
       timeout: (gate.timeout_seconds + 30) * 1000,
     })
-    if (execution.error) throw new Error("Feedback gate runner failed to start or exceeded its outer time bound")
+    if (execution.error) {
+      return await returned("check", JSON.stringify({
+        gate_id: gateId, success: false, code: null,
+        timed_out: execution.error?.code === "ETIMEDOUT", duration_ms: 0,
+        diagnostic: {
+          stdout: "",
+          stderr: "Controller feedback runner failed to start or exceeded its outer time bound.",
+          output_truncated: false,
+        },
+      }))
+    }
     let parsed
     try { parsed = JSON.parse(execution.stdout) }
-    catch { throw new Error("Feedback gate runner did not return bounded controller JSON") }
+    catch {
+      return await returned("check", JSON.stringify({
+        gate_id: gateId, success: false, code: execution.status,
+        timed_out: false, duration_ms: 0,
+        diagnostic: {
+          stdout: utf8Prefix(execution.stdout ?? "", 2048),
+          stderr: utf8Prefix(execution.stderr || "Feedback gate runner did not return bounded controller JSON.", 2048),
+          output_truncated: false,
+        },
+      }))
+    }
     const result = conciseFeedbackResult(parsed, gateId, gate.definition_sha256)
     if ((result.success && execution.status !== 0) || (!result.success && execution.status !== 1)) {
       throw new Error("Feedback gate runner exit status disagrees with its result")

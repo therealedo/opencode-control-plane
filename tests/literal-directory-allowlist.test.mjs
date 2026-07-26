@@ -62,6 +62,8 @@ test("literal allowed directories authorize descendant worker writes only", asyn
     contract_path: ".autopilot/runtime/candidate.json",
     max_returned_bytes: 32768,
     feedback_runner: path.join(root, "unused-gate-runner.mjs"),
+    action_runner: path.join(root, "unused-action-runner.mjs"),
+    allow_dependency_lock: false,
     feedback_gates: {},
     max_feedback_calls: 0,
     git_argv: await trustedGitArgv(root),

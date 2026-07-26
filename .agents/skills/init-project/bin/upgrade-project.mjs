@@ -44,6 +44,12 @@ const COREPACK_BLOCKER = Object.freeze({
   required_action: "Update the fixed Windows gate launcher to use a native executable or invoke Corepack through an explicit Node script argv.",
   resume_condition: "Resume once the authoritative credential-free gates can launch Corepack on Windows without the unsupported shim.",
 });
+const DEPENDENCY_LOCK_BLOCKER = Object.freeze({
+  kind: "tooling_authority",
+  message: "The available file-only tools cannot generate the complete pnpm 11.14.0 transitive lockfile, and the credential-free gate runner did not provide actionable output.",
+  required_action: "Provide an approved credential-free pnpm 11.14.0 lockfile-generation action (or a complete generated lockfile) and restore bounded feedback-gate execution.",
+  resume_condition: "A complete generated workspace lockfile or approved generation tool is available and the listed gates can return results.",
+});
 const args = parseArgs(process.argv.slice(2));
 const defaultSkillRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -281,7 +287,7 @@ async function applyTransaction({ target, skillRoot, release, previous, candidat
     await performSwaps(swaps);
     if (await exists(path.join(target, "control-plane"))) await chmod(path.join(target, "control-plane"), 0o755);
 
-    if (["exhausted-corepack-shim", "v1611-corepack-reset-repair"].includes(recoveryBoundary?.kind)) {
+    if (["exhausted-corepack-shim", "v1611-corepack-reset-repair", "v1612-dependency-lock"].includes(recoveryBoundary?.kind)) {
       await applyCorepackActiveRecovery(target, recoveryBoundary);
       recoveryApplied = true;
     } else if (isExhaustedRecovery(recoveryBoundary)) {
@@ -682,6 +688,69 @@ async function assertSafeControllerBoundary(target, state, previous) {
     };
   }
 
+  const dependencyLockBoundary =
+    previous?.version === "1.6.12" &&
+    state.status === "human_required" && state.phase === "blocked" && state.pid === null &&
+    state.blocker?.kind === "tooling_authority" &&
+    JSON.stringify(state.blocker) === JSON.stringify(DEPENDENCY_LOCK_BLOCKER) &&
+    state.last_failure_fingerprint === null && state.last_failure_evidence === null &&
+    attempt === 2 && typeof state.baseline_head === "string" && state.baseline_head === head &&
+    queue?.project_status === "blocked" && task?.status === "blocked" &&
+    candidate?.task_id === taskId && candidate?.attempt === attempt && candidate?.status === "blocked" &&
+    JSON.stringify(candidate.blocker) === JSON.stringify(DEPENDENCY_LOCK_BLOCKER) &&
+    Array.isArray(task?.allowed_paths) &&
+    isAllowedPath("package.json", task.allowed_paths) && isAllowedPath("pnpm-lock.yaml", task.allowed_paths);
+  if (dependencyLockBoundary) {
+    for (const artifact of ["review.json", "mode-intent.json"]) {
+      if (await exists(path.join(target, ".autopilot", "runtime", artifact))) {
+        throw upgradeError("The dependency-lock recovery contains unexpected runtime evidence", "ACTIVE_TASK");
+      }
+    }
+    if (await exists(path.join(target, ".project", "receipts", `${taskId}.json`))) {
+      throw upgradeError("The dependency-lock recovery task already has an accepted receipt", "ACTIVE_TASK");
+    }
+    const dirtyRecords = splitZero((await git(target, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])).stdout);
+    const taskDirtyPaths = [];
+    for (const record of dirtyRecords) {
+      const status = record.slice(0, 2);
+      const file = record.slice(3).replaceAll("\\", "/");
+      if (file === queueRelative && status === " M") continue;
+      if (![" M", "??"].includes(status) || !isAllowedPath(file, task.allowed_paths)) {
+        throw upgradeError("The dependency-lock recovery contains changes outside its approved task paths", "ACTIVE_TASK");
+      }
+      await assertSafeDestination(target, path.join(target, ...file.split("/")));
+      taskDirtyPaths.push(file);
+    }
+    if (taskDirtyPaths.length === 0 || taskDirtyPaths.length > 256) {
+      throw upgradeError("The dependency-lock recovery has an invalid preserved application-file count", "ACTIVE_TASK");
+    }
+    const allowedDirty = [queueRelative, ...taskDirtyPaths];
+    await assertCleanGit(target, { allowedDirty });
+    const headQueueResult = await git(target, ["show", `HEAD:${queueRelative}`]);
+    if (Buffer.byteLength(headQueueResult.stdout, "utf8") > MANIFEST_BYTES) {
+      throw upgradeError("Baseline queue exceeds its recovery cap", "ACTIVE_TASK");
+    }
+    let headQueue;
+    try { headQueue = JSON.parse(headQueueResult.stdout); }
+    catch { throw upgradeError("Baseline queue is not valid JSON", "ACTIVE_TASK"); }
+    const projected = structuredClone(queue);
+    projected.revision = headQueue.revision;
+    projected.project_status = headQueue.project_status;
+    if (projected.tasks?.[taskId]) projected.tasks[taskId].status = headQueue.tasks?.[taskId]?.status;
+    if (
+      headQueue.project_status !== "ready" || headQueue.tasks?.[taskId]?.status !== "ready" ||
+      JSON.stringify(projected) !== JSON.stringify(headQueue)
+    ) throw upgradeError("The dependency-lock queue contains changes beyond runtime status fields", "ACTIVE_TASK");
+    return {
+      kind: "v1612-dependency-lock", taskId, attempt, recoveryAttempt: 1,
+      baselineHead: head, currentHead: head, stateRevision: Number(state.revision ?? 0),
+      blockerKind: "tooling_authority", blocker: DEPENDENCY_LOCK_BLOCKER, allowedDirty,
+      stateBytes: await readManagedFile(path.join(target, ".autopilot", "state.json")),
+      queueBytes: await readManagedFile(path.join(target, ".project", "plan", "queue.json")),
+      candidateBytes: await readManagedFile(path.join(target, ".autopilot", "runtime", "candidate.json")),
+    };
+  }
+
   const affectedVersion = previous?.version &&
     compareVersions(previous.version, "1.6.3") >= 0 &&
     compareVersions(previous.version, "1.6.5") <= 0;
@@ -851,6 +920,7 @@ function isActiveTaskRecovery(boundary) {
     "literal-directory-path-boundary",
     "exhausted-corepack-shim",
     "v1611-corepack-reset-repair",
+    "v1612-dependency-lock",
   ].includes(boundary?.kind);
 }
 
@@ -860,6 +930,7 @@ function requiresRecoveryBaselineAdvance(boundary) {
     "literal-directory-path-boundary",
     "exhausted-corepack-shim",
     "v1611-corepack-reset-repair",
+    "v1612-dependency-lock",
   ].includes(boundary?.kind);
 }
 
@@ -939,13 +1010,14 @@ async function applyCorepackActiveRecovery(target, boundary) {
     readBoundedJson(queueFile, MANIFEST_BYTES),
     readBoundedJson(candidateFile, 64 * 1024),
   ]);
-  const originalBlocked = boundary.kind === "exhausted-corepack-shim";
+  const originalBlocked = ["exhausted-corepack-shim", "v1612-dependency-lock"].includes(boundary.kind);
+  const expectedBlocker = boundary.kind === "v1612-dependency-lock" ? DEPENDENCY_LOCK_BLOCKER : COREPACK_BLOCKER;
   const stateMatches = originalBlocked
     ? current.revision === boundary.stateRevision &&
       current.status === "human_required" && current.phase === "blocked" &&
       current.pid === null && current.active_task === boundary.taskId &&
       current.attempt === boundary.attempt && current.baseline_head === boundary.baselineHead &&
-      JSON.stringify(current.blocker) === JSON.stringify(COREPACK_BLOCKER)
+      JSON.stringify(current.blocker) === JSON.stringify(expectedBlocker)
     : current.revision === boundary.stateRevision &&
       current.status === "paused" && current.phase === "maintenance" &&
       current.pid === null && current.active_task === null && current.attempt === 0 &&
@@ -954,7 +1026,7 @@ async function applyCorepackActiveRecovery(target, boundary) {
     !stateMatches ||
     candidate?.task_id !== boundary.taskId ||
     candidate?.status !== "blocked" ||
-    JSON.stringify(candidate?.blocker) !== JSON.stringify(COREPACK_BLOCKER) ||
+    JSON.stringify(candidate?.blocker) !== JSON.stringify(expectedBlocker) ||
     !queue?.tasks?.[boundary.taskId]
   ) throw upgradeError("Corepack recovery state changed during the framework upgrade", "UPGRADE_RACE");
 
@@ -982,7 +1054,7 @@ async function applyCorepackActiveRecovery(target, boundary) {
     last_session: null,
     session_ids: [],
     baseline_head: boundary.currentHead,
-    blocker: COREPACK_BLOCKER,
+    blocker: expectedBlocker,
     completion: null,
     finalization: null,
   };
@@ -999,11 +1071,13 @@ async function applyCorepackActiveRecovery(target, boundary) {
 async function advanceRecoveryBaseline(target, boundary, commit) {
   const stateFile = path.join(target, ".autopilot", "state.json");
   const state = await readBoundedJson(stateFile, 64 * 1024);
-  const corepackRecovery = ["exhausted-corepack-shim", "v1611-corepack-reset-repair"].includes(boundary.kind);
+  const corepackRecovery = ["exhausted-corepack-shim", "v1611-corepack-reset-repair", "v1612-dependency-lock"].includes(boundary.kind);
   const expectedRevision = corepackRecovery ? boundary.stateRevision + 1 : boundary.stateRevision;
   const expectedAttempt = corepackRecovery ? boundary.recoveryAttempt : boundary.attempt;
   const expectedBaseline = corepackRecovery ? boundary.currentHead : boundary.baselineHead;
-  const expectedBlocker = corepackRecovery ? "gate_configuration" : boundary.blockerKind;
+  const expectedBlocker = boundary.kind === "v1612-dependency-lock"
+    ? "tooling_authority"
+    : corepackRecovery ? "gate_configuration" : boundary.blockerKind;
   if (
     state.revision !== expectedRevision ||
     state.status !== "human_required" ||

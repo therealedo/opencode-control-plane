@@ -607,6 +607,8 @@ test("controller-owned tools exclude ignored content and reject unsafe file iden
     max_returned_bytes: 32768,
     usage_path: usageFile,
     feedback_runner: path.join(root, ".autopilot", "bin", "run-gate.mjs"),
+    action_runner: path.join(root, ".autopilot", "bin", "run-action.mjs"),
+    allow_dependency_lock: false,
     feedback_gates: {},
     max_feedback_calls: 0,
     git_argv: await trustedGitArgv(root),
@@ -791,6 +793,8 @@ test("typed phase contracts derive identity and leave Git evidence to the contro
       max_returned_bytes: 32768,
       usage_path: usagePath,
       feedback_runner: path.join(root, ".autopilot", "bin", "run-gate.mjs"),
+      action_runner: path.join(root, ".autopilot", "bin", "run-action.mjs"),
+      allow_dependency_lock: false,
       feedback_gates: {},
       max_feedback_calls: 0,
       git_argv: gitArgv,
@@ -958,6 +962,8 @@ test("autopilot_check returns bounded gate feedback and enforces the two-call ph
     max_returned_bytes: 32768,
     usage_path: usageFile,
     feedback_runner: path.join(root, ".autopilot", "bin", "run-gate.mjs"),
+    action_runner: path.join(root, ".autopilot", "bin", "run-action.mjs"),
+    allow_dependency_lock: false,
     feedback_gates: {
       task: { definition_sha256: definitionSha256, timeout_seconds: gates.gates.task.timeout_seconds },
     },
@@ -986,6 +992,42 @@ test("autopilot_check returns bounded gate feedback and enforces the two-call ph
     calls: 2,
     returned_bytes: usage.returned_bytes,
   })
+})
+
+test("autopilot_lockfile runs one controller-owned dependency action and enforces its phase cap", async (t) => {
+  const root = await createScaffold(t, { ready: true })
+  const profile = await mkdtemp(path.join(os.tmpdir(), "autopilot-lockfile-profile-"))
+  t.after(() => rm(profile, { recursive: true, force: true }))
+  const copiedTool = path.join(profile, "autopilot.mjs")
+  const actionRunner = path.join(profile, "action-runner.mjs")
+  await copyFile(path.join(root, ".autopilot", "bin", "opencode-tools.mjs"), copiedTool)
+  await writeFile(actionRunner, `process.stdout.write(JSON.stringify({
+    action: "dependency-lock", package_manager: "pnpm@11.14.0", success: true,
+    code: 0, timed_out: false, duration_ms: 12,
+    diagnostic: { stdout: "resolved", stderr: "", output_truncated: false }
+  }) + "\\n")\n`, "utf8")
+  const usageFile = path.join(profile, "tool-usage.json")
+  const previousPolicy = process.env.AUTOPILOT_TOOL_POLICY
+  process.env.AUTOPILOT_TOOL_POLICY = Buffer.from(JSON.stringify({
+    schema_version: 1, root, task_id: "M001", phase: "execute", attempt: 1,
+    baseline_head: await git(root, ["rev-parse", "HEAD"]),
+    allowed_paths: ["package.json", "pnpm-lock.yaml"],
+    contract_path: ".autopilot/runtime/candidate.json",
+    max_returned_bytes: 32768, usage_path: usageFile,
+    feedback_runner: path.join(root, ".autopilot", "bin", "run-gate.mjs"),
+    action_runner: actionRunner, allow_dependency_lock: true,
+    feedback_gates: {}, max_feedback_calls: 0, git_argv: await trustedGitArgv(root),
+  }), "utf8").toString("base64")
+  t.after(() => {
+    if (previousPolicy === undefined) delete process.env.AUTOPILOT_TOOL_POLICY
+    else process.env.AUTOPILOT_TOOL_POLICY = previousPolicy
+  })
+  const tools = await import(`${pathToFileURL(copiedTool).href}?lockfile=${Date.now()}`)
+  const result = JSON.parse(await tools.lockfile.execute({}))
+  assert.equal(result.success, true)
+  assert.equal(result.package_manager, "pnpm@11.14.0")
+  await assert.rejects(tools.lockfile.execute({}), /limited to one call/)
+  assert.deepEqual((await readJson(usageFile)).by_tool.lockfile.calls, 1)
 })
 
 test("feedback permission stays denied without an eligible gate and for review", async (t) => {
