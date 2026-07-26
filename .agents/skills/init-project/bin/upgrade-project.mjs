@@ -23,6 +23,7 @@ import {
 } from "./lib/control-plane-files.mjs";
 import {
   atomicWriteFile,
+  isAllowedPath,
 } from "../assets/project/.autopilot/bin/lib/core.mjs";
 import {
   externalExecutionEnv,
@@ -283,11 +284,11 @@ async function applyTransaction({ target, skillRoot, release, previous, candidat
     const manifest = await createInstalledManifest(skillRoot, target, {
       installedAt,
       previous,
-      kind: isExhaustedRecovery(recoveryBoundary)
+      kind: isActiveTaskRecovery(recoveryBoundary)
         ? "upgrade-recovery"
         : previous ? "upgrade" : "legacy-adoption",
     });
-    if (isExhaustedRecovery(recoveryBoundary)) {
+    if (isActiveTaskRecovery(recoveryBoundary)) {
       Object.assign(manifest.migration_history.at(-1), {
         recovered_task: recoveryBoundary.taskId,
         recovery_reason: recoveryBoundary.kind,
@@ -333,7 +334,7 @@ async function applyTransaction({ target, skillRoot, release, previous, candidat
     const commitResult = await git(target, ["commit", "--no-verify", "-m", message]);
     const commit = (await git(target, ["rev-parse", "HEAD"])).stdout.trim();
     committed = true;
-    if (recoveryBoundary?.kind === "legacy-insufficient-evidence") {
+    if (requiresRecoveryBaselineAdvance(recoveryBoundary)) {
       await advanceRecoveryBaseline(target, recoveryBoundary, commit);
     }
     for (const swap of swaps) {
@@ -344,7 +345,7 @@ async function applyTransaction({ target, skillRoot, release, previous, candidat
       await rm(swap.stage, { force: true });
     }
     await assertCleanGit(target, {
-      allowedDirty: recoveryBoundary?.kind === "legacy-insufficient-evidence"
+      allowedDirty: requiresRecoveryBaselineAdvance(recoveryBoundary)
         ? recoveryBoundary.allowedDirty
         : [],
     });
@@ -499,7 +500,87 @@ async function assertSafeControllerBoundary(target, state, previous) {
       attempt,
       baselineHead: head,
       stateRevision: Number(state.revision ?? 0),
+      blockerKind: "insufficient_evidence",
       allowedDirty: [queueRelative],
+    };
+  }
+
+  const task = queue?.tasks?.[taskId];
+  const literalBoundaryMessage = "Allowed directory entries are not writable as prefixes, and the repository has no pre-existing apps, packages, or tests directories.";
+  const literalPathBoundary =
+    previous?.version &&
+    compareVersions(previous.version, "1.6.8") >= 0 &&
+    compareVersions(previous.version, "1.6.9") <= 0 &&
+    state.status === "human_required" &&
+    state.phase === "blocked" &&
+    state.pid === null &&
+    state.blocker?.kind === "path_boundary" &&
+    state.blocker?.message === literalBoundaryMessage &&
+    state.last_failure_fingerprint === null &&
+    state.last_failure_evidence === null &&
+    attempt === 1 &&
+    typeof state.baseline_head === "string" &&
+    state.baseline_head === head &&
+    queue?.project_status === "blocked" &&
+    task?.status === "blocked" &&
+    candidate?.task_id === taskId &&
+    candidate?.attempt === attempt &&
+    candidate?.status === "blocked" &&
+    candidate?.blocker?.kind === "path_boundary" &&
+    candidate?.blocker?.message === literalBoundaryMessage &&
+    JSON.stringify(candidate.blocker) === JSON.stringify(state.blocker) &&
+    Array.isArray(task?.allowed_paths) &&
+    task.allowed_paths.some((allowed) => typeof allowed === "string" && !/[?*]/.test(allowed));
+  if (literalPathBoundary) {
+    const dirtyRecords = splitZero((await git(target, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])).stdout);
+    const taskDirtyPaths = [];
+    for (const record of dirtyRecords) {
+      const status = record.slice(0, 2);
+      const file = record.slice(3).replaceAll("\\", "/");
+      if (file === queueRelative && status === " M") continue;
+      if (![" M", "??"].includes(status) || !isAllowedPath(file, task.allowed_paths)) {
+        throw upgradeError("The blocked path-boundary task contains changes outside its approved task paths", "ACTIVE_TASK");
+      }
+      await assertSafeDestination(target, path.join(target, ...file.split("/")));
+      taskDirtyPaths.push(file);
+    }
+    if (taskDirtyPaths.length > 64) {
+      throw upgradeError("The blocked path-boundary task has too many preserved application files", "ACTIVE_TASK");
+    }
+    const allowedDirty = [queueRelative, ...taskDirtyPaths];
+    await assertCleanGit(target, { allowedDirty });
+    const headQueueResult = await git(target, ["show", `HEAD:${queueRelative}`]);
+    if (Buffer.byteLength(headQueueResult.stdout, "utf8") > MANIFEST_BYTES) {
+      throw upgradeError("Baseline queue exceeds its recovery cap", "ACTIVE_TASK");
+    }
+    let headQueue;
+    try { headQueue = JSON.parse(headQueueResult.stdout); }
+    catch { throw upgradeError("Baseline queue is not valid JSON", "ACTIVE_TASK"); }
+    const projected = structuredClone(queue);
+    projected.revision = headQueue.revision;
+    projected.project_status = headQueue.project_status;
+    if (projected.tasks?.[taskId]) projected.tasks[taskId].status = headQueue.tasks?.[taskId]?.status;
+    if (
+      headQueue.project_status !== "ready" ||
+      headQueue.tasks?.[taskId]?.status !== "ready" ||
+      JSON.stringify(projected) !== JSON.stringify(headQueue)
+    ) throw upgradeError("The blocked task queue contains changes beyond runtime status fields", "ACTIVE_TASK");
+    for (const artifact of ["review.json", "mode-intent.json"]) {
+      if (await exists(path.join(target, ".autopilot", "runtime", artifact))) {
+        throw upgradeError("The blocked path-boundary task contains unexpected runtime evidence", "ACTIVE_TASK");
+      }
+    }
+    if (await exists(path.join(target, ".project", "receipts", `${taskId}.json`))) {
+      throw upgradeError("The blocked path-boundary task already has an accepted receipt", "ACTIVE_TASK");
+    }
+    return {
+      kind: "literal-directory-path-boundary",
+      taskId,
+      attempt,
+      baselineHead: head,
+      stateRevision: Number(state.revision ?? 0),
+      blockerKind: "path_boundary",
+      allowedDirty,
     };
   }
 
@@ -513,7 +594,6 @@ async function assertSafeControllerBoundary(target, state, previous) {
   const exhaustedRecoveryKind = affectedAuthVersion
     ? "exhausted-provider-auth"
     : affectedVersion ? "exhausted-empty-opencode" : null;
-  const task = queue?.tasks?.[taskId];
   const attemptLimit = Math.min(
     Number(task?.attempt_limit ?? Number.POSITIVE_INFINITY),
     Number((await readBoundedJson(path.join(target, ".autopilot", "config.json"), MANIFEST_BYTES))?.budgets?.max_attempts_per_task ?? Number.POSITIVE_INFINITY),
@@ -577,6 +657,14 @@ async function assertSafeControllerBoundary(target, state, previous) {
 
 function isExhaustedRecovery(boundary) {
   return ["exhausted-empty-opencode", "exhausted-provider-auth"].includes(boundary?.kind);
+}
+
+function isActiveTaskRecovery(boundary) {
+  return isExhaustedRecovery(boundary) || boundary?.kind === "literal-directory-path-boundary";
+}
+
+function requiresRecoveryBaselineAdvance(boundary) {
+  return ["legacy-insufficient-evidence", "literal-directory-path-boundary"].includes(boundary?.kind);
 }
 
 function hasRetainedProviderAuthFailure(state) {
@@ -656,7 +744,7 @@ async function advanceRecoveryBaseline(target, boundary, commit) {
     state.active_task !== boundary.taskId ||
     state.attempt !== boundary.attempt ||
     state.baseline_head !== boundary.baselineHead ||
-    state.blocker?.kind !== "insufficient_evidence"
+    state.blocker?.kind !== boundary.blockerKind
   ) throw upgradeError("Blocked task state changed during the framework upgrade", "UPGRADE_RACE");
   const next = {
     ...state,
@@ -715,7 +803,7 @@ async function assertCleanGit(target, { allowedDirty = [] } = {}) {
   const dirty = splitZero(status);
   const unexpected = dirty.filter((record) => {
     const file = record.slice(3).replaceAll("\\", "/");
-    return record.slice(0, 2) !== " M" || !allowed.has(file);
+    return ![" M", "??"].includes(record.slice(0, 2)) || !allowed.has(file);
   });
   if (unexpected.length > 0) {
     throw upgradeError("Commit or discard existing project changes before upgrading the Control Plane", "DIRTY_WORKTREE");

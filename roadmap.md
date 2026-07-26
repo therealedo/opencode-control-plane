@@ -46,9 +46,9 @@ Blueprint and migration history belong to the cold planning path. They must not 
 
 Repository ownership and runtime placement are separate concerns. Durable product contracts and accepted evidence should remain reviewable with the project, while frequently written state, logs, locks, temporary phase contracts, and executable runtime files should move out of synchronized target repositories when this can be done without weakening recovery, portability, or rollback.
 
-## Current baseline: v1.6.9
+## Current baseline: v1.6.10
 
-Version 1.6.9 carries forward the v1.6.8 baseline and provides:
+Version 1.6.10 carries forward the v1.6.9 baseline and provides:
 
 - [x] Modular, evolving blueprints.
 - [x] Deterministic scaffolding and upgrades.
@@ -99,8 +99,27 @@ Version 1.6.9 carries forward the v1.6.8 baseline and provides:
 - [x] A narrowly guarded v1.6.7 upgrade recovery recognizes retained structured `401` evidence, restores the committed ready task, and records the recovery.
 - [x] Plain text that merely mentions authentication is not accepted as recovery proof.
 - [x] Consistent literal-directory allowlist semantics across worker writes and controller validation.
+- [x] A guarded in-place upgrade bridge for the already blocked v1.6.8/v1.6.9 literal-directory task state.
 
 The fixed-context measurement and simulated evaluation remain regression guards, not proof of end-to-end token savings or unchanged implementation quality. Controlled live trials across models are the next step before further prompt compression or reduced-review policy.
+
+## Immediate maintenance: v1.6.10 blocked-task upgrade bridge (shipped)
+
+**Goal:** let a project already stopped by the v1.6.8/v1.6.9 literal-directory bug install the corrected worker tools without rebuilding or manually migrating its active task.
+
+Delivered outcomes:
+
+- [x] Recognize only the exact bounded `path_boundary` state emitted by the literal-directory mismatch.
+- [x] Require matching state and candidate blockers, attempt 1, no failure evidence, no receipt, an otherwise baseline-identical queue, and any preserved application diff to contain only unstaged private regular files inside the task allowlist.
+- [x] Upgrade managed framework files and advance the active task's baseline to the reversible framework commit.
+- [x] Preserve the blueprint, task definition, queue status, first attempt, candidate evidence, application files, and Git history.
+- [x] Refuse unrelated path blockers, staged/deleted/linked/out-of-bound application changes, altered queues, unexpected runtime evidence, or unsupported versions.
+
+Exit criteria:
+
+- [x] **Update everything** upgrades the reproduced v1.6.8 blocked M001 state to v1.6.10.
+- [x] M001 remains blocked at attempt 1 until the user explicitly resumes it.
+- [x] Resume launches the corrected worker without broadening any allowed path.
 
 ## Immediate maintenance: v1.6.9 literal-directory task writes (shipped)
 
