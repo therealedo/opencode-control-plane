@@ -135,7 +135,7 @@ test("noninteractive dashboard snapshot reports version, state, and visible acti
   assert.equal(result.code, 0, result.stderr);
   const snapshot = JSON.parse(result.stdout);
   assert.equal(snapshot.status.status, "idle");
-  assert.equal(snapshot.metadata.installed_version, "1.6.8");
+  assert.equal(snapshot.metadata.installed_version, "1.6.9");
   assert.equal(snapshot.metadata.runtime_variant, "default");
   assert.equal(snapshot.actions.length, 8);
   assert.equal(snapshot.actions[0].id, "start");

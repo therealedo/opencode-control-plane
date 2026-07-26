@@ -1554,7 +1554,7 @@ test("an older in-progress interview refreshes owned scripts, preserves answers,
     const output = JSON.parse(closeout.stdout)
     assert.equal(output.interview_refresh.interview_refreshed, true)
     assert.equal(output.interview_refresh.from_version, "1.5.0")
-    assert.equal(output.interview_refresh.to_version, "1.6.8")
+    assert.equal(output.interview_refresh.to_version, "1.6.9")
     assert.equal(output.interview_refresh.commit, null)
     assert.equal(output.upgrade.changed, false)
     assert.deepEqual(
@@ -1711,7 +1711,7 @@ test("single initialization closeout returns only failed provisioning checks whe
     const output = JSON.parse(closeout.stdout)
     assert.equal(output.ready, false)
     assert.equal(output.upgrade.from_version, "1.2.0")
-    assert.equal(output.upgrade.to_version, "1.6.8")
+    assert.equal(output.upgrade.to_version, "1.6.9")
     assert.equal(output.upgrade.changed, true)
     assert.equal(output.started, null)
     assert.ok(output.provisioning.some((item) => item.kind === "opencode"))

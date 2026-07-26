@@ -46,9 +46,9 @@ Blueprint and migration history belong to the cold planning path. They must not 
 
 Repository ownership and runtime placement are separate concerns. Durable product contracts and accepted evidence should remain reviewable with the project, while frequently written state, logs, locks, temporary phase contracts, and executable runtime files should move out of synchronized target repositories when this can be done without weakening recovery, portability, or rollback.
 
-## Current baseline: v1.6.8
+## Current baseline: v1.6.9
 
-Version 1.6.8 carries forward the v1.6.7 baseline and provides:
+Version 1.6.9 carries forward the v1.6.8 baseline and provides:
 
 - [x] Modular, evolving blueprints.
 - [x] Deterministic scaffolding and upgrades.
@@ -98,8 +98,26 @@ Version 1.6.8 carries forward the v1.6.7 baseline and provides:
 - [x] Authentication-only failures with no application changes refund the semantic attempt and wait for reauthentication plus explicit resume.
 - [x] A narrowly guarded v1.6.7 upgrade recovery recognizes retained structured `401` evidence, restores the committed ready task, and records the recovery.
 - [x] Plain text that merely mentions authentication is not accepted as recovery proof.
+- [x] Consistent literal-directory allowlist semantics across worker writes and controller validation.
 
 The fixed-context measurement and simulated evaluation remain regression guards, not proof of end-to-end token savings or unchanged implementation quality. Controlled live trials across models are the next step before further prompt compression or reduced-review policy.
+
+## Immediate maintenance: v1.6.9 literal-directory task writes (shipped)
+
+**Goal:** let greenfield tasks create files beneath explicitly allowed directory entries without asking the user to widen an already correct task boundary.
+
+Delivered outcomes:
+
+- [x] Treat a literal allowed path such as `apps/web` as authorizing that directory and its descendants in worker write, edit, move, delete, and executable-mode operations.
+- [x] Match the descendant semantics already enforced by the controller's post-phase changed-file validator.
+- [x] Preserve wildcard matching, protected paths, ignored files, symlink and hardlink rejection, and atomic writes.
+- [x] Add a worker-tool regression using a literal directory allowlist.
+
+Exit criteria:
+
+- [x] A worker allowed `src` can create and modify `src/**` files.
+- [x] The same worker cannot write outside `src`.
+- [x] Existing v1.6.8 projects upgrade without blueprint, queue, application, attempt, or history reconstruction.
 
 ## Immediate maintenance: v1.6.8 provider-authentication boundary (shipped)
 

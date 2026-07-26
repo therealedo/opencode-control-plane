@@ -203,7 +203,14 @@ function normalizeGlob(value) {
 }
 
 function allowedWrite(relative) {
-  return policy.allowed_paths.some((pattern) => globRegex(pattern).test(relative))
+  return policy.allowed_paths.some((pattern) => {
+    const normalized = normalizeGlob(pattern)
+    if (!normalized.includes("*")) {
+      const prefix = normalized.replace(/\/$/, "")
+      return relative === prefix || relative.startsWith(`${prefix}/`)
+    }
+    return globRegex(normalized).test(relative)
+  })
 }
 
 function git(args, { maxBuffer = 8 * 1024 * 1024, input } = {}) {
