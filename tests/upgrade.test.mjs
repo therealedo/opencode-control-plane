@@ -15,7 +15,7 @@ import {
 
 const upgrader = path.join(repositoryRoot, ".agents", "skills", "init-project", "bin", "upgrade-project.mjs");
 
-async function upgradedSkill(t, version = "1.6.16") {
+async function upgradedSkill(t, version = "1.6.17") {
   const parent = await mkdtemp(path.join(os.tmpdir(), "ocp-release-fixture-"));
   t.after(async () => rm(parent, { recursive: true, force: true }));
   const skills = path.join(repositoryRoot, ".agents", "skills");
@@ -58,14 +58,14 @@ test("project upgrade changes only owned framework files, validates, commits, an
   const output = JSON.parse(result.stdout);
   assert.equal(output.changed, true);
   assert.equal(output.from_version, "1.6.14");
-  assert.equal(output.to_version, "1.6.16");
+  assert.equal(output.to_version, "1.6.17");
   assert.match(output.commit, /^[0-9a-f]{40,64}$/);
   assert.match(output.rollback, /^git revert /);
   assert.deepEqual(await readFile(configFile), beforeConfig);
   assert.deepEqual(await readFile(queueFile), beforeQueue);
   assert.match(await readFile(path.join(root, "AGENTS.md"), "utf8"), /release fixture 1\.6\.15/);
   const manifest = await readJson(path.join(root, ".autopilot", "control-plane.json"));
-  assert.equal(manifest.version, "1.6.16");
+  assert.equal(manifest.version, "1.6.17");
   assert.equal(manifest.migration_history.at(-1).kind, "upgrade");
   assert.equal(await git(root, ["status", "--porcelain=v1", "--untracked-files=all"]), "");
   assert.match(await git(root, ["log", "-1", "--pretty=%s"]), /control-plane: upgrade 1\.6\.14 to 1\.6\.15/);
@@ -415,6 +415,19 @@ test("project upgrade preserves and refunds the exact v1.6.14 controller-runner 
     baseline_head: baseline,
     last_failure_fingerprint: null,
     last_failure_evidence: null,
+    task_tool_usage: {
+      "execute:a2": {
+        schema_version: 1,
+        phase: "execute",
+        task_id: "M001",
+        tool_calls: 2,
+        returned_bytes: 12,
+        by_tool: {
+          read: { calls: 1, returned_bytes: 12 },
+          lockfile: { calls: 1, returned_bytes: 0 },
+        },
+      },
+    },
     blocker,
   });
   queue.revision += 2;
@@ -449,6 +462,7 @@ test("project upgrade preserves and refunds the exact v1.6.14 controller-runner 
   assert.equal(recovered.attempt, 1);
   assert.equal(recovered.baseline_head, output.commit);
   assert.deepEqual(recovered.blocker, blocker);
+  assert.deepEqual(recovered.task_tool_usage, state.task_tool_usage);
   await assert.rejects(readFile(candidateFile), { code: "ENOENT" });
   assert.equal(await readFile(path.join(root, "apps", "preserved.txt"), "utf8"), "preserved work\n");
   assert.equal((await readJson(manifestFile)).migration_history.at(-1).recovery_reason, "v1614-controller-runner");
@@ -553,7 +567,7 @@ test("project upgrade uses controller Conventional Commit identity for mapped pr
   assert.equal(result.code, 0, result.stderr || result.stdout);
   assert.equal(
     await git(root, ["log", "-1", "--pretty=%s"]),
-    "chore(control-plane): upgrade 1.6.14 to 1.6.16",
+    "chore(control-plane): upgrade 1.6.14 to 1.6.17",
   );
   assert.deepEqual(await readJson(configFile), config);
 });
@@ -572,7 +586,7 @@ test("project upgrade honors a schema-6 fixed commit policy", async (t) => {
 
   const result = await invoke(root, sourceSkill);
   assert.equal(result.code, 0, result.stderr || result.stdout);
-  assert.equal(await git(root, ["log", "-1", "--pretty=%s"]), "chore: upgrade 1.6.14 to 1.6.16");
+  assert.equal(await git(root, ["log", "-1", "--pretty=%s"]), "chore: upgrade 1.6.14 to 1.6.17");
   assert.deepEqual(await readJson(configFile), config);
 });
 
@@ -649,7 +663,7 @@ test("project upgrade honors the checkout's global CRLF normalization without en
 
   const result = await invoke(root, sourceSkill, [], environment);
   assert.equal(result.code, 0, result.stderr || result.stdout);
-  assert.equal(JSON.parse(result.stdout).to_version, "1.6.16");
+  assert.equal(JSON.parse(result.stdout).to_version, "1.6.17");
 });
 
 test("legacy CRLF projects adopt without rebuilding or rewriting project-owned context", async (t) => {
@@ -689,7 +703,7 @@ test("legacy CRLF projects adopt without rebuilding or rewriting project-owned c
   assert.equal(result.code, 0, result.stderr || result.stdout);
   const output = JSON.parse(result.stdout);
   assert.equal(output.adopted_legacy_project, true);
-  assert.equal((await readJson(path.join(root, ".autopilot", "control-plane.json"))).version, "1.6.16");
+  assert.equal((await readJson(path.join(root, ".autopilot", "control-plane.json"))).version, "1.6.17");
   assert.match(await readFile(path.join(root, ".gitattributes"), "utf8"), /Control Plane-owned text/);
   const finalStatus = await run(["git", "status", "--porcelain=v1", "--untracked-files=all"], { cwd: root, env: environment });
   assert.equal(finalStatus.stdout, "", finalStatus.stderr || finalStatus.stdout);
@@ -1003,7 +1017,7 @@ test("project upgrade rejects hidden Git index flags before writing", async (t) 
   const result = await invoke(root, sourceSkill);
   assert.notEqual(result.code, 0);
   assert.equal(JSON.parse(result.stderr).code, "UNSAFE_GIT_INDEX");
-  assert.equal((await readJson(path.join(root, ".autopilot", "control-plane.json"))).version, "1.6.16");
+  assert.equal((await readJson(path.join(root, ".autopilot", "control-plane.json"))).version, "1.6.17");
 });
 
 test("legacy project adoption requires explicit approval and preserves unmarked ignore content", async (t) => {

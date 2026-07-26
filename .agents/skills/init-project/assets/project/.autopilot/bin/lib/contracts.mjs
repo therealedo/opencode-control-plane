@@ -526,7 +526,7 @@ export function validateTaskToolUsage(value, {
     issue(issues, location, `must contain at most ${TASK_TOOL_USAGE_MAX_ENTRIES} bounded phase-usage entries and ${TASK_TOOL_USAGE_MAX_BYTES} bytes`);
     return issues;
   }
-  const allowedTools = new Set(["read", "list", "search", "write", "edit", "mutate", "check", "contract"]);
+  const allowedTools = new Set(["read", "list", "search", "write", "edit", "mutate", "check", "lockfile", "contract"]);
   const validCounter = (candidate, maximum) => Number.isSafeInteger(candidate) && candidate >= 0 && candidate <= maximum;
   const modelTokenFields = [
     "input_tokens",
@@ -553,7 +553,7 @@ export function validateTaskToolUsage(value, {
       usage.schema_version !== 1 || usage.phase !== match[1] ||
       (taskId !== null && usage.task_id !== taskId) ||
       !validCounter(usage.tool_calls, 10000) || !validCounter(usage.returned_bytes, 64 * 1024) ||
-      !object(usage.by_tool) || Object.keys(usage.by_tool).length > 8
+      !object(usage.by_tool) || Object.keys(usage.by_tool).length > 9
     ) {
       issue(issues, itemLocation, "contains invalid phase identity or aggregate counters");
       continue;

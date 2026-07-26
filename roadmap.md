@@ -46,9 +46,9 @@ Blueprint and migration history belong to the cold planning path. They must not 
 
 Repository ownership and runtime placement are separate concerns. Durable product contracts and accepted evidence should remain reviewable with the project, while frequently written state, logs, locks, temporary phase contracts, and executable runtime files should move out of synchronized target repositories when this can be done without weakening recovery, portability, or rollback.
 
-## Current baseline: v1.6.16
+## Current baseline: v1.6.17
 
-Version 1.6.16 carries forward the v1.6.15 baseline and provides:
+Version 1.6.17 carries forward the v1.6.16 baseline and provides:
 
 - [x] Modular, evolving blueprints.
 - [x] Deterministic scaffolding and upgrades.
@@ -113,8 +113,20 @@ Version 1.6.16 carries forward the v1.6.15 baseline and provides:
 - [x] Controller-owned actions and feedback gates launch through the controller's fixed Node runtime instead of the OpenCode/Bun worker host.
 - [x] A guarded v1.6.14 recovery preserves the affected M001 workspace and restores attempt 1 after the exact runner-routing failure.
 - [x] The project dashboard sends stopped blocked tasks directly to the guarded updater instead of making their recovery unreachable behind the maintenance guard.
+- [x] Durable phase-usage validation accepts the controller-owned lockfile action, allowing the guarded recovery to retain its real usage audit through post-upgrade validation.
 
 The fixed-context measurement and simulated evaluation remain regression guards, not proof of end-to-end token savings or unchanged implementation quality. Controlled live trials across models are the next step before further prompt compression or reduced-review policy.
+
+## Immediate maintenance: v1.6.17 lockfile usage validation (shipped)
+
+**Goal:** complete the v1.6.14 recovery transaction when its retained usage ledger records the controller-owned lockfile action.
+
+Delivered outcomes:
+
+- [x] Add `lockfile` to the bounded durable phase-tool vocabulary.
+- [x] Preserve the failed attempt's token and tool-usage audit instead of deleting evidence to pass validation.
+- [x] Reproduce the exact post-copy rollback using a disposable copy of the affected project state.
+- [x] Regression-test the real retained lockfile usage shape through the complete guarded upgrade.
 
 ## Immediate maintenance: v1.6.16 reachable blocked-task upgrades (shipped)
 

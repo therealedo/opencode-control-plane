@@ -1004,6 +1004,9 @@ test("agent-authored contracts reject secrets, oversized prose, and non-name env
     },
   }
   assert.deepEqual(contracts.validateTaskToolUsage(usage, { taskId: "M001" }), [])
+  usage["execute:a1"].tool_calls = 2
+  usage["execute:a1"].by_tool.lockfile = { calls: 1, returned_bytes: 0 }
+  assert.deepEqual(contracts.validateTaskToolUsage(usage, { taskId: "M001" }), [])
   usage["execute:a1"].model_usage.input_tokens = -1
   usage["execute:a1"].model_usage.cost = Number.POSITIVE_INFINITY
   const modelUsageIssues = JSON.stringify(contracts.validateTaskToolUsage(usage, { taskId: "M001" }))
@@ -1033,7 +1036,7 @@ test("agent-authored contracts reject secrets, oversized prose, and non-name env
 test("optional model telemetry is omitted before the task usage ledger reaches 24 KiB", async () => {
   const contracts = await import(pathToFileURL(path.join(templateRoot, ".autopilot", "bin", "lib", "contracts.mjs")).href)
   const taskId = "M".repeat(128)
-  const tools = ["read", "list", "search", "write", "edit", "mutate", "check", "contract"]
+  const tools = ["read", "list", "search", "write", "edit", "mutate", "check", "lockfile", "contract"]
   const keys = Array.from({ length: 20 }, (_item, index) => [
     `execute:a${index + 1}`,
     `review:a${index + 1}`,
