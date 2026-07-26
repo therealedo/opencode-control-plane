@@ -89,7 +89,7 @@ When an update is shown, press U once. The Control Plane will:
 5. create a reversible local Git commit in each changed project;
 6. resume only workers that were running before the update.
 
-It never kills a worker, silently adopts a legacy project, overwrites application code, or hides a failed project. If one project is dirty, unavailable, or blocked, other safe projects still update. A narrowly recognized failure from versions 1.6.3 through 1.6.5 is repaired during upgrade only when Git proves OpenCode created no application changes and the queue changed only its runtime status; every other blocked project still fails closed for review.
+It never kills a worker, silently adopts a legacy project, overwrites application code, or hides a failed project. If one project is dirty, unavailable, or blocked, other safe projects still update. A narrowly recognized failure from versions 1.6.3 through 1.6.5 is passed through to the guarded project upgrader and repaired only when Git proves OpenCode created no application changes and the queue changed only its runtime status; every other blocked project still fails closed for review.
 
 ### Upgrade from Control Plane 1.0
 

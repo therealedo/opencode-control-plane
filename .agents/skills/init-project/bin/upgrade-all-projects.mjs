@@ -51,16 +51,27 @@ export async function upgradeRegisteredProject(project, { dryRun = false, waitMs
   }
   const before = await controllerBoundary(root);
   if (dryRun) {
-    if (before.live || before.state.active_task || before.state.completion || before.state.finalization) {
+    if (before.live || before.state.completion || before.state.finalization) {
       return result(project, "deferred", { error: "A live or unfinished controller transaction must reach maintenance before preview." });
     }
-    const preview = await invokeUpdater(root, { dryRun: true });
-    return result(project, preview.changed ? "preview" : "current", { from_version: preview.from_version, to_version: preview.to_version, changed_files: preview.changed_files });
+    try {
+      const preview = await invokeUpdater(root, { dryRun: true });
+      return result(project, preview.changed ? "preview" : "current", {
+        from_version: preview.from_version,
+        to_version: preview.to_version,
+        changed_files: preview.changed_files,
+        recovered_active_task: preview.recovered_active_task ?? null,
+        recovery_kind: preview.recovery_kind ?? null,
+      });
+    } catch (error) {
+      if (isBoundaryError(error)) return result(project, "deferred", { error: bounded(error.message), code: error.code });
+      throw error;
+    }
   }
 
   const wasRunning = before.live;
-  if (!wasRunning && (before.state.active_task || before.state.completion || before.state.finalization)) {
-    return result(project, "deferred", { error: "An interrupted or paused task must be resolved in the project view before framework files can change." });
+  if (!wasRunning && (before.state.completion || before.state.finalization)) {
+    return result(project, "deferred", { error: "An unfinished controller transaction must be resolved before framework files can change." });
   }
   if (wasRunning) {
     await invokeController(root, "maintenance");
@@ -85,6 +96,15 @@ export async function upgradeRegisteredProject(project, { dryRun = false, waitMs
     }
   }
   if (updateError) {
+    if (isBoundaryError(updateError)) {
+      return result(project, "deferred", {
+        error: bounded(updateError.message),
+        code: updateError.code,
+        was_running: wasRunning,
+        resumed,
+        resume_error: resumeError ? bounded(resumeError.message) : null,
+      });
+    }
     return result(project, "failed", {
       error: bounded(updateError.message),
       code: updateError.code ?? "PROJECT_UPDATE_FAILED",
@@ -109,9 +129,15 @@ export async function upgradeRegisteredProject(project, { dryRun = false, waitMs
     to_version: upgrade.to_version,
     commit: upgrade.commit ?? null,
     rollback: upgrade.rollback ?? null,
+    recovered_active_task: upgrade.recovered_active_task ?? null,
+    recovery_kind: upgrade.recovery_kind ?? null,
     was_running: wasRunning,
     resumed,
   });
+}
+
+function isBoundaryError(error) {
+  return ["ACTIVE_TASK", "ACTIVE_TRANSACTION"].includes(error?.code);
 }
 
 async function waitForMaintenance(root, waitMs) {

@@ -42,9 +42,9 @@ Blueprint and migration history belong to the cold planning path. They must not 
 
 Repository ownership and runtime placement are separate concerns. Durable product contracts and accepted evidence should remain reviewable with the project, while frequently written state, logs, locks, temporary phase contracts, and executable runtime files should move out of synchronized target repositories when this can be done without weakening recovery, portability, or rollback.
 
-## Current baseline: v1.6.6
+## Current baseline: v1.6.7
 
-Version 1.6.6 carries forward the v1.6.5 baseline and provides:
+Version 1.6.7 carries forward the v1.6.6 baseline and provides:
 
 - [x] Modular, evolving blueprints.
 - [x] Deterministic scaffolding and upgrades.
@@ -87,8 +87,29 @@ Version 1.6.6 carries forward the v1.6.5 baseline and provides:
 - [x] A narrowly guarded upgrade recovery for v1.6.3 through v1.6.5 tasks exhausted solely by failed OpenCode launches with no application changes.
 - [x] Automatic restoration of that task's exact committed ready queue, with a paused maintenance boundary and auditable migration record.
 - [x] Fail-closed refusal of the recovery when any application file, queue field, phase contract, receipt, transaction, baseline, or controller-liveness proof differs.
+- [x] Fleet upgrades delegate stopped active-task eligibility to the guarded project upgrader instead of rejecting every active task first.
+- [x] Recoverable v1.6.3 through v1.6.5 projects can now cross the v1.6.6 bridge through **Update everything**.
+- [x] Ordinary active tasks and unfinished transactions remain deferred without framework, queue, state, or attempt changes.
 
 The fixed-context measurement and simulated evaluation remain regression guards, not proof of end-to-end token savings or unchanged implementation quality. Controlled live trials across models are the next step before further prompt compression or reduced-review policy.
+
+## Immediate maintenance: v1.6.7 fleet recovery routing (shipped)
+
+**Goal:** make the one-click fleet updater reach v1.6.6's guarded exhausted-launch recovery without weakening normal active-task protection.
+
+Delivered outcomes:
+
+- [x] Removed the duplicate fleet-level rejection of every stopped project with an active task.
+- [x] Delegated recovery eligibility to the project upgrader, which owns the full Git, state, receipt, transaction, and version proof.
+- [x] Returned the recovery kind and recovered task in fleet preview and completion results.
+- [x] Preserved deferred status for ordinary active tasks and unfinished transactions.
+- [x] Added an end-to-end fleet regression for both the recoverable and non-recoverable paths.
+
+Exit criteria:
+
+- [x] **Update everything** previews and upgrades the reproduced v1.6.3 exhausted-empty CRM state.
+- [x] The recovered task returns to its exact committed ready queue at attempt 0.
+- [x] A normal stopped active task remains unchanged and reports `ACTIVE_TASK`.
 
 ## Immediate maintenance: v1.6.6 exhausted-launch recovery (shipped)
 
