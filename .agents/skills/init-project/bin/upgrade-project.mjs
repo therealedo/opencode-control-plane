@@ -274,7 +274,7 @@ async function applyTransaction({ target, skillRoot, release, previous, candidat
     await performSwaps(swaps);
     if (await exists(path.join(target, "control-plane"))) await chmod(path.join(target, "control-plane"), 0o755);
 
-    if (recoveryBoundary?.kind === "exhausted-empty-opencode") {
+    if (isExhaustedRecovery(recoveryBoundary)) {
       await applyExhaustedRecovery(target, recoveryBoundary);
       recoveryApplied = true;
     }
@@ -283,14 +283,14 @@ async function applyTransaction({ target, skillRoot, release, previous, candidat
     const manifest = await createInstalledManifest(skillRoot, target, {
       installedAt,
       previous,
-      kind: recoveryBoundary?.kind === "exhausted-empty-opencode"
+      kind: isExhaustedRecovery(recoveryBoundary)
         ? "upgrade-recovery"
         : previous ? "upgrade" : "legacy-adoption",
     });
-    if (recoveryBoundary?.kind === "exhausted-empty-opencode") {
+    if (isExhaustedRecovery(recoveryBoundary)) {
       Object.assign(manifest.migration_history.at(-1), {
         recovered_task: recoveryBoundary.taskId,
-        recovery_reason: "exhausted-empty-opencode",
+        recovery_reason: recoveryBoundary.kind,
       });
     }
     const manifestSwap = await stageManifestSwap(target, manifestFile, manifest, nonce);
@@ -506,6 +506,13 @@ async function assertSafeControllerBoundary(target, state, previous) {
   const affectedVersion = previous?.version &&
     compareVersions(previous.version, "1.6.3") >= 0 &&
     compareVersions(previous.version, "1.6.5") <= 0;
+  const affectedAuthVersion = previous?.version &&
+    compareVersions(previous.version, "1.6.6") >= 0 &&
+    compareVersions(previous.version, "1.6.7") <= 0 &&
+    hasRetainedProviderAuthFailure(state);
+  const exhaustedRecoveryKind = affectedAuthVersion
+    ? "exhausted-provider-auth"
+    : affectedVersion ? "exhausted-empty-opencode" : null;
   const task = queue?.tasks?.[taskId];
   const attemptLimit = Math.min(
     Number(task?.attempt_limit ?? Number.POSITIVE_INFINITY),
@@ -518,7 +525,7 @@ async function assertSafeControllerBoundary(target, state, previous) {
   ].map((name) => exists(path.join(target, ".autopilot", "runtime", name))));
   const receiptAbsent = !(await exists(path.join(target, ".project", "receipts", `${taskId}.json`)));
   const exhaustedShape =
-    affectedVersion &&
+    exhaustedRecoveryKind &&
     state.status === "human_required" &&
     state.phase === "blocked" &&
     state.pid === null &&
@@ -556,7 +563,7 @@ async function assertSafeControllerBoundary(target, state, previous) {
   const stateBytes = await readManagedFile(path.join(target, ".autopilot", "state.json"));
   const queueBytes = await readManagedFile(path.join(target, ".project", "plan", "queue.json"));
   return {
-    kind: "exhausted-empty-opencode",
+    kind: exhaustedRecoveryKind,
     taskId,
     attempt,
     baselineHead: head,
@@ -566,6 +573,33 @@ async function assertSafeControllerBoundary(target, state, previous) {
     queueBytes,
     baselineQueueBytes: Buffer.from(headQueueResult.stdout, "utf8"),
   };
+}
+
+function isExhaustedRecovery(boundary) {
+  return ["exhausted-empty-opencode", "exhausted-provider-auth"].includes(boundary?.kind);
+}
+
+function hasRetainedProviderAuthFailure(state) {
+  if (state?.last_failure_evidence?.failure?.code !== "OPENCODE_FAILED") return false;
+  const excerpt = state.last_failure_evidence.failure.details_excerpt;
+  if (typeof excerpt !== "string" || excerpt.length === 0 || excerpt.length > 4096) return false;
+  let details;
+  try { details = JSON.parse(excerpt); }
+  catch { return false; }
+  if (details?.code !== 1 || typeof details?.diagnostic_excerpt !== "string") return false;
+  for (const line of details.diagnostic_excerpt.split(/\r?\n/)) {
+    if (!line.trim().startsWith("{")) continue;
+    let event;
+    try { event = JSON.parse(line); }
+    catch { continue; }
+    const message = event?.type === "error" && typeof event?.error?.data?.message === "string"
+      ? event.error.data.message
+      : "";
+    if (/(?:token refresh failed|authentication failed|unauthorized|invalid (?:access |refresh )?token|expired (?:access |refresh )?token)/i.test(message)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function applyExhaustedRecovery(target, boundary) {

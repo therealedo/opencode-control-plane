@@ -127,7 +127,8 @@ Local workers are policy-bounded, not operating-system sandboxed. OpenCode and p
 - **`control-plane` is not recognized:** reopen the terminal. If it still fails, add the setup-reported command folder to your user PATH.
 - **Not ready:** open the project and choose **Check readiness**; fix the first named item, then Start.
 - **Waiting for you:** complete the exact action shown, then Resume.
-- **OpenCode failed without a useful reason:** update to v1.6.6 or newer. New failures retain a short sanitized diagnostic, never the raw provider output or detected credential values.
+- **OpenCode asks you to sign in again:** update to v1.6.8 or newer. The worker pauses after the first authentication failure without spending an attempt; sign in, then choose **Resume**.
+- **OpenCode failed without a useful reason:** v1.6.6 and newer retain a short sanitized diagnostic, never the raw provider output or detected credential values.
 - **Update deferred:** resolve the active blocker or dirty Git worktree, return to a safe boundary, and press U again.
 - **Managed-file drift:** do not force the update. Restore or review the named Control Plane-owned file first.
 - **Project moved:** press F on the missing entry, then A and select its new folder.

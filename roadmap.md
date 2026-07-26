@@ -42,9 +42,9 @@ Blueprint and migration history belong to the cold planning path. They must not 
 
 Repository ownership and runtime placement are separate concerns. Durable product contracts and accepted evidence should remain reviewable with the project, while frequently written state, logs, locks, temporary phase contracts, and executable runtime files should move out of synchronized target repositories when this can be done without weakening recovery, portability, or rollback.
 
-## Current baseline: v1.6.7
+## Current baseline: v1.6.8
 
-Version 1.6.7 carries forward the v1.6.6 baseline and provides:
+Version 1.6.8 carries forward the v1.6.7 baseline and provides:
 
 - [x] Modular, evolving blueprints.
 - [x] Deterministic scaffolding and upgrades.
@@ -90,8 +90,32 @@ Version 1.6.7 carries forward the v1.6.6 baseline and provides:
 - [x] Fleet upgrades delegate stopped active-task eligibility to the guarded project upgrader instead of rejecting every active task first.
 - [x] Recoverable v1.6.3 through v1.6.5 projects can now cross the v1.6.6 bridge through **Update everything**.
 - [x] Ordinary active tasks and unfinished transactions remain deferred without framework, queue, state, or attempt changes.
+- [x] Structured OpenCode provider-authentication failures stop at the first failed launch instead of consuming repair attempts.
+- [x] Authentication-only failures with no application changes refund the semantic attempt and wait for reauthentication plus explicit resume.
+- [x] A narrowly guarded v1.6.7 upgrade recovery recognizes retained structured `401` evidence, restores the committed ready task, and records the recovery.
+- [x] Plain text that merely mentions authentication is not accepted as recovery proof.
 
 The fixed-context measurement and simulated evaluation remain regression guards, not proof of end-to-end token savings or unchanged implementation quality. Controlled live trials across models are the next step before further prompt compression or reduced-review policy.
+
+## Immediate maintenance: v1.6.8 provider-authentication boundary (shipped)
+
+**Goal:** prevent expired provider sessions from spending a task's repair budget and recover the already affected v1.6.7 project safely.
+
+Delivered outcomes:
+
+- [x] Parse only structured OpenCode error events when classifying provider authentication failures.
+- [x] Stop after the first failed launch, retain a bounded sanitized diagnostic, and request reauthentication.
+- [x] Refund the semantic attempt only when the task has no application-file changes.
+- [x] Resume the same task after the user reconnects the provider; do not rebuild or restart discovery.
+- [x] Recover the exact v1.6.7 exhausted-authentication state during a normal fleet upgrade.
+- [x] Require the existing baseline, queue, transaction, receipt, and controller-liveness proofs before recovery.
+- [x] Reject unstructured authentication text as insufficient proof.
+
+Exit criteria:
+
+- [x] A simulated structured `401` pauses at attempt 0 after one launch.
+- [x] Reauthentication plus Resume completes the same task from attempt 1.
+- [x] The reproduced CRM state previews as `exhausted-provider-auth` without changing application files.
 
 ## Immediate maintenance: v1.6.7 fleet recovery routing (shipped)
 

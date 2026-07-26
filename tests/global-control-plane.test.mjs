@@ -27,7 +27,7 @@ test("fleet actions are arrow-selectable while preserving shortcut keys", () => 
   assert.equal(withoutProject[2].enabled, false);
   assert.equal(nextFleetAction(withoutProject, 0, 1), 1);
 
-  const rendered = renderFleet({ projects: [project], selected: 0, selectedAction: 1, update: { installed_version: "1.6.7" } });
+  const rendered = renderFleet({ projects: [project], selected: 0, selectedAction: 1, update: { installed_version: "1.6.8" } });
   assert.match(rendered, /Actions  ←\/→ select/);
   assert.match(rendered, /↑\/↓/);
   assert.match(rendered, /\[A: Add project\]/);
@@ -37,7 +37,7 @@ test("fleet actions are arrow-selectable while preserving shortcut keys", () => 
     projects: [project],
     selected: 0,
     selectedAction: 1,
-    update: { installed_version: "1.6.7" },
+    update: { installed_version: "1.6.8" },
     color: true,
   });
   assert.match(colored, /\x1b\[1;36m▶ Producer Scribe/);
@@ -67,14 +67,14 @@ test("fleet rendering stays inside the requested terminal height", () => {
     mode: { id: index === 0 ? "running" : "idle", label: index === 0 ? "Running" : "Ready" },
     status: {},
     blueprint_version: 1,
-    control_plane_version: "1.6.7",
+    control_plane_version: "1.6.8",
   }));
   const height = 24;
   const rendered = renderFleet({
     projects,
     selected: 15,
     selectedAction: 0,
-    update: { installed_version: "1.6.7" },
+    update: { installed_version: "1.6.8" },
     message: "Ready.",
     width: 64,
     height,

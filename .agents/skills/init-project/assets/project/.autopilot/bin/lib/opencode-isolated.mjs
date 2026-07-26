@@ -1494,8 +1494,11 @@ export async function runFreshOpenCode(project, prompt, {
   if (result.output_truncated) throw new AutopilotError(`Fresh OpenCode ${phase} output exceeded its configured byte cap`, { code: "OPENCODE_OUTPUT_TRUNCATED" });
   if (result.timed_out || result.code !== 0) {
     const diagnostic_excerpt = failureDiagnostic(result);
-    throw new AutopilotError(`Fresh OpenCode ${phase} session failed${result.timed_out ? " (timeout)" : ""}; a bounded sanitized diagnostic was retained`, {
-      code: result.timed_out ? "OPENCODE_TIMEOUT" : "OPENCODE_FAILED",
+    const authFailure = result.timed_out ? null : structuredAuthFailure(result.stdout);
+    throw new AutopilotError(authFailure
+      ? `Fresh OpenCode ${phase} session could not authenticate the configured provider: ${authFailure}`
+      : `Fresh OpenCode ${phase} session failed${result.timed_out ? " (timeout)" : ""}; a bounded sanitized diagnostic was retained`, {
+      code: authFailure ? "OPENCODE_AUTH_FAILED" : result.timed_out ? "OPENCODE_TIMEOUT" : "OPENCODE_FAILED",
       details: {
         code: result.code,
         output_hash: sha256(`${result.stdout}\n${result.stderr}`),
@@ -1514,6 +1517,23 @@ export async function runFreshOpenCode(project, prompt, {
   };
   ephemeralPhaseSecrets.set(phaseResult, phaseSecrets);
   return phaseResult;
+}
+
+function structuredAuthFailure(stdout) {
+  for (const line of String(stdout).split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let event;
+    try { event = JSON.parse(line); }
+    catch { continue; }
+    const message = event?.type === "error" && typeof event?.error?.data?.message === "string"
+      ? event.error.data.message.trim()
+      : "";
+    if (
+      message &&
+      /(?:token refresh failed|authentication failed|unauthorized|invalid (?:access |refresh )?token|expired (?:access |refresh )?token)/i.test(message)
+    ) return truncateUtf8(message, 1024);
+  }
+  return null;
 }
 
 function failureDiagnostic(result) {

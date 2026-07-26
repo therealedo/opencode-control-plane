@@ -15,7 +15,7 @@ import {
 
 const upgrader = path.join(repositoryRoot, ".agents", "skills", "init-project", "bin", "upgrade-project.mjs");
 
-async function upgradedSkill(t, version = "1.6.8") {
+async function upgradedSkill(t, version = "1.6.9") {
   const parent = await mkdtemp(path.join(os.tmpdir(), "ocp-release-fixture-"));
   t.after(async () => rm(parent, { recursive: true, force: true }));
   const skills = path.join(repositoryRoot, ".agents", "skills");
@@ -46,18 +46,18 @@ test("project upgrade changes only owned framework files, validates, commits, an
   assert.equal(result.code, 0, result.stderr);
   const output = JSON.parse(result.stdout);
   assert.equal(output.changed, true);
-  assert.equal(output.from_version, "1.6.7");
-  assert.equal(output.to_version, "1.6.8");
+  assert.equal(output.from_version, "1.6.8");
+  assert.equal(output.to_version, "1.6.9");
   assert.match(output.commit, /^[0-9a-f]{40,64}$/);
   assert.match(output.rollback, /^git revert /);
   assert.deepEqual(await readFile(configFile), beforeConfig);
   assert.deepEqual(await readFile(queueFile), beforeQueue);
-  assert.match(await readFile(path.join(root, "AGENTS.md"), "utf8"), /release fixture 1\.6\.8/);
+  assert.match(await readFile(path.join(root, "AGENTS.md"), "utf8"), /release fixture 1\.6\.9/);
   const manifest = await readJson(path.join(root, ".autopilot", "control-plane.json"));
-  assert.equal(manifest.version, "1.6.8");
+  assert.equal(manifest.version, "1.6.9");
   assert.equal(manifest.migration_history.at(-1).kind, "upgrade");
   assert.equal(await git(root, ["status", "--porcelain=v1", "--untracked-files=all"]), "");
-  assert.match(await git(root, ["log", "-1", "--pretty=%s"]), /control-plane: upgrade 1\.6\.7 to 1\.6\.8/);
+  assert.match(await git(root, ["log", "-1", "--pretty=%s"]), /control-plane: upgrade 1\.6\.8 to 1\.6\.9/);
 });
 
 test("project upgrade uses controller Conventional Commit identity for mapped projects", async (t) => {
@@ -76,7 +76,7 @@ test("project upgrade uses controller Conventional Commit identity for mapped pr
   assert.equal(result.code, 0, result.stderr || result.stdout);
   assert.equal(
     await git(root, ["log", "-1", "--pretty=%s"]),
-    "chore(control-plane): upgrade 1.6.7 to 1.6.8",
+    "chore(control-plane): upgrade 1.6.8 to 1.6.9",
   );
   assert.deepEqual(await readJson(configFile), config);
 });
@@ -95,7 +95,7 @@ test("project upgrade honors a schema-6 fixed commit policy", async (t) => {
 
   const result = await invoke(root, sourceSkill);
   assert.equal(result.code, 0, result.stderr || result.stdout);
-  assert.equal(await git(root, ["log", "-1", "--pretty=%s"]), "chore: upgrade 1.6.7 to 1.6.8");
+  assert.equal(await git(root, ["log", "-1", "--pretty=%s"]), "chore: upgrade 1.6.8 to 1.6.9");
   assert.deepEqual(await readJson(configFile), config);
 });
 
@@ -172,7 +172,7 @@ test("project upgrade honors the checkout's global CRLF normalization without en
 
   const result = await invoke(root, sourceSkill, [], environment);
   assert.equal(result.code, 0, result.stderr || result.stdout);
-  assert.equal(JSON.parse(result.stdout).to_version, "1.6.8");
+  assert.equal(JSON.parse(result.stdout).to_version, "1.6.9");
 });
 
 test("legacy CRLF projects adopt without rebuilding or rewriting project-owned context", async (t) => {
@@ -212,7 +212,7 @@ test("legacy CRLF projects adopt without rebuilding or rewriting project-owned c
   assert.equal(result.code, 0, result.stderr || result.stdout);
   const output = JSON.parse(result.stdout);
   assert.equal(output.adopted_legacy_project, true);
-  assert.equal((await readJson(path.join(root, ".autopilot", "control-plane.json"))).version, "1.6.8");
+  assert.equal((await readJson(path.join(root, ".autopilot", "control-plane.json"))).version, "1.6.9");
   assert.match(await readFile(path.join(root, ".gitattributes"), "utf8"), /Control Plane-owned text/);
   const finalStatus = await run(["git", "status", "--porcelain=v1", "--untracked-files=all"], { cwd: root, env: environment });
   assert.equal(finalStatus.stdout, "", finalStatus.stderr || finalStatus.stdout);
@@ -376,6 +376,116 @@ test("project upgrade safely refunds an exhausted OpenCode launch that changed n
   );
 });
 
+test("project upgrade refunds a v1.6.7 authentication-only exhaustion with retained proof", async (t) => {
+  const root = await createScaffold(t, { ready: true, mode: "success" });
+  const sourceSkill = await upgradedSkill(t);
+  const installedManifestFile = path.join(root, ".autopilot", "control-plane.json");
+  const installedManifest = await readJson(installedManifestFile);
+  installedManifest.version = "1.6.7";
+  await writeJson(installedManifestFile, installedManifest);
+  await git(root, ["add", ".autopilot/control-plane.json"]);
+  await git(root, ["commit", "-m", "test: simulate affected 1.6.7 auth project"]);
+  const stateFile = path.join(root, ".autopilot", "state.json");
+  const queueFile = path.join(root, ".project", "plan", "queue.json");
+  const baseline = await git(root, ["rev-parse", "HEAD"]);
+  const baselineQueue = await readFile(queueFile);
+  const state = await readJson(stateFile);
+  const queue = await readJson(queueFile);
+  Object.assign(state, {
+    revision: 12,
+    run_id: "v167-auth-exhaustion",
+    status: "human_required",
+    phase: "blocked",
+    pid: null,
+    started_at: new Date().toISOString(),
+    active_task: "M001",
+    attempt: 3,
+    baseline_head: baseline,
+    last_failure_fingerprint: "v167-auth-fingerprint",
+    last_failure_evidence: {
+      schema_version: 1,
+      failure: {
+        code: "OPENCODE_FAILED",
+        message: "Fresh OpenCode repair session failed; a bounded sanitized diagnostic was retained",
+        details_excerpt: JSON.stringify({
+          code: 1,
+          output_hash: "b".repeat(64),
+          diagnostic_excerpt: `stdout:\n${JSON.stringify({
+            type: "error",
+            sessionID: "fixture-auth-session",
+            error: { name: "UnknownError", data: { message: "Token refresh failed: 401" } },
+          })}`,
+        }),
+      },
+    },
+    blocker: {
+      kind: "repair_exhausted",
+      error_code: "OPENCODE_FAILED",
+      message: "Repair stopped after attempt 3: Token refresh failed: 401",
+      required_action: "Reconnect the provider.",
+      resume_condition: "Authentication succeeds.",
+    },
+  });
+  queue.revision = Number(queue.revision ?? 0) + 6;
+  queue.project_status = "running";
+  queue.tasks.M001.status = "in_progress";
+  await writeJson(stateFile, state);
+  await writeJson(queueFile, queue);
+
+  const result = await invoke(root, sourceSkill);
+  assert.equal(result.code, 0, result.stderr || result.stdout);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.recovered_active_task, "M001");
+  assert.equal(output.recovery_kind, "exhausted-provider-auth");
+  assert.deepEqual(await readFile(queueFile), baselineQueue);
+  const recovered = await readJson(stateFile);
+  assert.equal(recovered.status, "paused");
+  assert.equal(recovered.phase, "maintenance");
+  assert.equal(recovered.active_task, null);
+  assert.equal(recovered.attempt, 0);
+  assert.equal(await git(root, ["status", "--porcelain=v1", "--untracked-files=all"]), "");
+  const manifest = await readJson(path.join(root, ".autopilot", "control-plane.json"));
+  assert.equal(manifest.migration_history.at(-1).kind, "upgrade-recovery");
+  assert.equal(manifest.migration_history.at(-1).recovery_reason, "exhausted-provider-auth");
+});
+
+test("project upgrade does not trust authentication words outside a structured provider event", async (t) => {
+  const root = await createScaffold(t, { ready: true, mode: "success" });
+  const sourceSkill = await upgradedSkill(t);
+  const manifestFile = path.join(root, ".autopilot", "control-plane.json");
+  const stateFile = path.join(root, ".autopilot", "state.json");
+  const queueFile = path.join(root, ".project", "plan", "queue.json");
+  const manifest = await readJson(manifestFile);
+  manifest.version = "1.6.7";
+  await writeJson(manifestFile, manifest);
+  await git(root, ["add", ".autopilot/control-plane.json"]);
+  await git(root, ["commit", "-m", "test: simulate unproven 1.6.7 failure"]);
+  const state = await readJson(stateFile);
+  const queue = await readJson(queueFile);
+  Object.assign(state, {
+    status: "human_required", phase: "blocked", pid: null, active_task: "M001", attempt: 3,
+    baseline_head: await git(root, ["rev-parse", "HEAD"]),
+    last_failure_fingerprint: "unproven-auth-words",
+    last_failure_evidence: {
+      failure: {
+        code: "OPENCODE_FAILED",
+        details_excerpt: JSON.stringify({ code: 1, diagnostic_excerpt: "stdout:\nToken refresh failed: 401" }),
+      },
+    },
+    blocker: { kind: "repair_exhausted", error_code: "OPENCODE_FAILED" },
+  });
+  queue.project_status = "running";
+  queue.tasks.M001.status = "in_progress";
+  await writeJson(stateFile, state);
+  await writeJson(queueFile, queue);
+
+  const result = await invoke(root, sourceSkill);
+  assert.notEqual(result.code, 0);
+  assert.equal(JSON.parse(result.stderr).code, "ACTIVE_TASK");
+  assert.equal((await readJson(stateFile)).attempt, 3);
+  assert.equal((await readJson(manifestFile)).version, "1.6.7");
+});
+
 test("project upgrade never refunds an exhausted OpenCode task with application changes", async (t) => {
   const root = await createScaffold(t, { ready: true });
   const sourceSkill = await upgradedSkill(t);
@@ -416,7 +526,7 @@ test("project upgrade rejects hidden Git index flags before writing", async (t) 
   const result = await invoke(root, sourceSkill);
   assert.notEqual(result.code, 0);
   assert.equal(JSON.parse(result.stderr).code, "UNSAFE_GIT_INDEX");
-  assert.equal((await readJson(path.join(root, ".autopilot", "control-plane.json"))).version, "1.6.7");
+  assert.equal((await readJson(path.join(root, ".autopilot", "control-plane.json"))).version, "1.6.8");
 });
 
 test("legacy project adoption requires explicit approval and preserves unmarked ignore content", async (t) => {

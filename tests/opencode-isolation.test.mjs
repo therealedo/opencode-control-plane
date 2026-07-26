@@ -179,6 +179,15 @@ if (launchFailureMode === "exit") {
   process.stdout.write("stdout token=" + secret + "\n")
   process.exit(7)
 }
+if (launchFailureMode === "auth") {
+  process.stdout.write(JSON.stringify({
+    type: "error",
+    timestamp: Date.now(),
+    sessionID: "auth-failure-session",
+    error: { name: "UnknownError", data: { message: "Token refresh failed: 401" } },
+  }) + "\n")
+  process.exit(1)
+}
 
 const agent = worker ? (stage === "repair" ? "autopilot-recovery" : "autopilot-worker") : "autopilot-reviewer"
 const agentText = await readFile(path.join(process.env.OPENCODE_CONFIG_DIR, "agents", agent + ".md"), "utf8")
@@ -1517,6 +1526,20 @@ test("failed OpenCode launches retain only a bounded sanitized diagnostic", asyn
         assert.doesNotMatch(error?.details?.diagnostic_excerpt ?? "", new RegExp(workerSecret))
         assert.doesNotMatch(error?.details?.diagnostic_excerpt ?? "", /\x1b/)
         assert.ok(Buffer.byteLength(error?.details?.diagnostic_excerpt ?? "", "utf8") <= 4096)
+        return true
+      },
+    )
+    await writeFile(path.join(root, ".autopilot", "runtime", "launch-failure-mode.txt"), "auth\n", "utf8")
+    await assert.rejects(
+      isolatedModule.runFreshOpenCode(project, "Stage: execute\nTask: M001\nAttempt: 2\n", {
+        phase: "execute",
+        taskId: "M001",
+        attempt: 2,
+        baseline: await git(root, ["rev-parse", "HEAD"]),
+      }),
+      (error) => {
+        assert.equal(error?.code, "OPENCODE_AUTH_FAILED")
+        assert.match(error?.details?.diagnostic_excerpt ?? "", /Token refresh failed: 401/)
         return true
       },
     )

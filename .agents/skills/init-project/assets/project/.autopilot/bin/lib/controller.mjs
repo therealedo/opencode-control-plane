@@ -2374,6 +2374,31 @@ export class Controller {
           await this.humanRequired(blockerFrom(handledError, "policy_violation"), taskId);
           return false;
         }
+        if (handledError?.code === "OPENCODE_AUTH_FAILED") {
+          const changedAtAuthFailure = await taskChangedFiles(this.project, baseline, {
+            modeIntents: acceptedModeSnapshot.intents,
+          });
+          if (changedAtAuthFailure.length === 0) {
+            await clearPhaseContracts(this.project);
+            const authEvidence = boundedRecoveryEvidence({ failure: failureEvidence(handledError) });
+            const diagnostic = recoveryText(handledError?.details?.diagnostic_excerpt, 2048);
+            this.state = await writeState(this.project, this.state, {
+              attempt: Math.max(0, Number(this.state.attempt ?? 0) - 1),
+              phase: "auth_required",
+              last_failure_fingerprint: null,
+              last_failure_evidence: authEvidence,
+              blocker: null,
+            });
+            await this.humanRequired({
+              kind: "provider_auth_required",
+              error_code: "OPENCODE_AUTH_FAILED",
+              message: `OpenCode could not authenticate the configured provider${diagnostic ? `\nDiagnostic:\n${diagnostic}` : ""}`,
+              required_action: "Reconnect the configured provider in OpenCode, then verify the provider login without placing credentials in project files or chat.",
+              resume_condition: "Provider authentication succeeds and the explicit resume command is run.",
+            }, taskId);
+            return false;
+          }
+        }
         const fingerprint = sha256(stableJson(failureEvidence(handledError)));
         const outcome = await this.recordFailure(
           handledError,

@@ -1703,6 +1703,36 @@ test("attempt and no-progress limits stop repeated failing work", async (t) => {
   }
 })
 
+test("provider authentication failure pauses once and refunds the semantic attempt", async (t) => {
+  const root = await createScaffold(t, { ready: true, mode: "auth-fail" })
+  const stateFile = path.join(root, ".autopilot", "state.json")
+  const runtime = path.join(root, ".autopilot", "runtime")
+
+  const stopped = await runAutopilot(root)
+  assert.equal(stopped.code, 0, stopped.stderr || stopped.stdout)
+  const blocked = await readJson(stateFile)
+  const firstInvocations = await readJson(path.join(runtime, "fake-invocations.json"))
+  assert.equal(blocked.status, "human_required")
+  assert.equal(blocked.blocker.kind, "provider_auth_required")
+  assert.equal(blocked.blocker.error_code, "OPENCODE_AUTH_FAILED")
+  assert.match(blocked.blocker.message, /Token refresh failed: 401/)
+  assert.equal(blocked.attempt, 0)
+  assert.deepEqual(firstInvocations.map((item) => [item.stage, item.attempt]), [["execute", 1]])
+  await assert.rejects(access(path.join(root, "src", "result.txt")), /ENOENT/)
+
+  await writeJson(path.join(runtime, "fake-config.json"), { mode: "success" })
+  const resumed = await runAutopilot(root, "resume")
+  assert.equal(resumed.code, 0, resumed.stderr || resumed.stdout)
+  const completed = await readJson(stateFile)
+  const allInvocations = await readJson(path.join(runtime, "fake-invocations.json"))
+  assert.equal(completed.status, "complete")
+  assert.deepEqual(allInvocations.map((item) => [item.stage, item.attempt]), [
+    ["execute", 1],
+    ["execute", 1],
+    ["review", 1],
+  ])
+})
+
 test("near-cap phase ledgers roll over automatically during active-task recovery", async (t) => {
   const root = await createScaffold(t, { ready: true })
   const queueFile = path.join(root, ".project", "plan", "queue.json")

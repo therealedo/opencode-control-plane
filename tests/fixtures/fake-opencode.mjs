@@ -132,6 +132,16 @@ invocations.push({
 await writeFile(invocationFile, `${JSON.stringify(invocations, null, 2)}\n`, "utf8")
 if (Number.isInteger(config.delay_ms) && config.delay_ms > 0) await delay(config.delay_ms)
 
+if (config.mode === "auth-fail") {
+  process.stdout.write(`${JSON.stringify({
+    type: "error",
+    timestamp: Date.now(),
+    sessionID: sessionId,
+    error: { name: "UnknownError", data: { message: "Token refresh failed: 401" } },
+  })}\n`)
+  process.exit(1)
+}
+
 if (stage === "review") {
   const requestChanges = config.mode === "review-repair" && attempt === 1
   await writeJson(path.join(runtime, "review.json"), {
