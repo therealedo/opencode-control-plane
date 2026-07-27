@@ -172,11 +172,7 @@ async function interactive(root) {
     draw();
     try {
       if (["start", "resume"].includes(menuAction.id)) {
-        if (menuAction.id === "start") {
-          const preflight = await invokeController(root, "preflight");
-          if (!preflight.value?.ready) throw new Error(firstPreflightProblem(preflight.value));
-        }
-        await invokeController(root, menuAction.id);
+        await launchWorker(root, menuAction.id);
         model.message = menuAction.id === "start" ? "Worker started." : "Worker resumed.";
       } else if (["pause", "stop"].includes(menuAction.id)) {
         await invokeController(root, menuAction.id);
@@ -378,6 +374,13 @@ function firstPreflightProblem(value) {
     value.opencode?.error ?? value.controller_tools?.error ?? value.dependency?.error ??
     value.phases?.find((item) => !item.ok)?.error ?? value.gates?.find((item) => !item.ok)?.error;
   return issue?.message ? `Not ready: ${safeText(issue.message, 600)}` : "Not ready. Review the preflight report in the project terminal.";
+}
+
+export async function launchWorker(root, action, invoke = invokeController) {
+  if (!["start", "resume"].includes(action)) throw new Error(`Unsupported worker launch action: ${action}`);
+  const preflight = await invoke(root, "preflight");
+  if (!preflight.value?.ready) throw new Error(firstPreflightProblem(preflight.value));
+  return invoke(root, action);
 }
 
 function parseFailure(result) {

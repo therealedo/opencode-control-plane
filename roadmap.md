@@ -46,9 +46,9 @@ Blueprint and migration history belong to the cold planning path. They must not 
 
 Repository ownership and runtime placement are separate concerns. Durable product contracts and accepted evidence should remain reviewable with the project, while frequently written state, logs, locks, temporary phase contracts, and executable runtime files should move out of synchronized target repositories when this can be done without weakening recovery, portability, or rollback.
 
-## Current baseline: v1.6.19
+## Current baseline: v1.6.20
 
-Version 1.6.19 carries forward the v1.6.18 baseline and provides:
+Version 1.6.20 carries forward the v1.6.19 baseline and provides:
 
 - [x] Modular, evolving blueprints.
 - [x] Deterministic scaffolding and upgrades.
@@ -123,9 +123,23 @@ Version 1.6.19 carries forward the v1.6.18 baseline and provides:
 - [x] Typed controller, environment, task, and runner-protocol failures prevent infrastructure defects from masquerading as product failures.
 - [x] Retried zero-attempt dispatches retain append-only model-usage evidence instead of overwriting earlier provider usage.
 - [x] v1.6.18 controller-tooling blockers upgrade structurally in place with exact rollback evidence and no application rebuild.
+- [x] A successful structural recovery consumes its already-fulfilled maintenance request only after the upgrade is durably committed and validated.
+- [x] Token-free readiness remains required before one explicit Resume continues the recovered task without another maintenance pause or semantic attempt.
 - [x] Managed-source validation rejects synchronized-folder conflict copies before they can enter a release.
 
 The fixed-context measurement and simulated evaluation remain regression guards, not proof of end-to-end token savings or unchanged implementation quality. Controlled live trials across models are the next step before further prompt compression or reduced-review policy.
+
+## Immediate maintenance: v1.6.20 structural recovery continuation (shipped)
+
+**Goal:** let a successfully upgraded structural recovery continue after readiness with one explicit Resume, without a stale maintenance request pausing it again.
+
+Delivered outcomes:
+
+- [x] Treat the pre-upgrade maintenance request as fulfilled only after the structural recovery upgrade is durably committed and validated.
+- [x] Clear that fulfilled maintenance marker without starting the worker automatically.
+- [x] Keep zero-token readiness as the required check before explicit Resume.
+- [x] Preserve the recovered task, eligible attempt refund, rollback evidence, and fail-closed behavior.
+- [x] Verify in disposable projects that readiness launches no model session and one Resume continues M001 without an extra semantic attempt or redundant maintenance pause.
 
 ## Immediate maintenance: v1.6.19 pre-v1.7 controller stabilization (shipped)
 

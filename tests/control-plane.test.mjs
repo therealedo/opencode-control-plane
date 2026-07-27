@@ -15,6 +15,7 @@ import {
   writeRuntimeVariant,
 } from "../.agents/skills/init-project/assets/project/.autopilot/bin/lib/runtime-settings.mjs";
 import {
+  launchWorker,
   parseArgs as parseDashboardArgs,
   restoreTerminalInput,
   upgradeNeedsMaintenanceDrain,
@@ -80,6 +81,45 @@ test("dashboard lets the guarded updater inspect a stopped blocked task", () => 
     active_task: "M001",
     controller_lock: { pid: 7 },
   }), true);
+});
+
+test("dashboard preflights both worker launch paths before detaching", async () => {
+  for (const action of ["start", "resume"]) {
+    const calls = [];
+    const invoke = async (_root, invokedAction) => {
+      calls.push(invokedAction);
+      return { value: invokedAction === "preflight" ? { ready: true } : { detached: true } };
+    };
+    const result = await launchWorker("C:\\bounded-project", action, invoke);
+    assert.deepEqual(calls, ["preflight", action]);
+    assert.deepEqual(result.value, { detached: true });
+  }
+});
+
+test("failed Resume preflight reports the first bounded problem without launching a worker", async () => {
+  const calls = [];
+  const firstProblem = `controller tooling unavailable ${"x".repeat(700)}`;
+  const invoke = async (_root, action) => {
+    calls.push(action);
+    return {
+      value: {
+        ready: false,
+        validation: { issues: [{ message: firstProblem }] },
+        structure: { error: { message: "later structure problem" } },
+      },
+    };
+  };
+
+  await assert.rejects(
+    launchWorker("C:\\bounded-project", "resume", invoke),
+    (error) => {
+      assert.match(error.message, /^Not ready: controller tooling unavailable/);
+      assert.doesNotMatch(error.message, /later structure problem/);
+      assert.ok(error.message.length <= 611, `readiness message was ${error.message.length} characters`);
+      return true;
+    },
+  );
+  assert.deepEqual(calls, ["preflight"]);
 });
 
 test("dashboard exposes a stopped controller's precise recovery error", async (t) => {
@@ -151,7 +191,7 @@ test("noninteractive dashboard snapshot reports version, state, and visible acti
   assert.equal(result.code, 0, result.stderr);
   const snapshot = JSON.parse(result.stdout);
   assert.equal(snapshot.status.status, "idle");
-  assert.equal(snapshot.metadata.installed_version, "1.6.19");
+  assert.equal(snapshot.metadata.installed_version, "1.6.20");
   assert.equal(snapshot.metadata.runtime_variant, "default");
   assert.equal(snapshot.actions.length, 8);
   assert.equal(snapshot.actions[0].id, "start");

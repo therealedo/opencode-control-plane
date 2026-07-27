@@ -72,6 +72,12 @@ const GATE_CLEANUP_BLOCKER = Object.freeze({
   required_action: "Repair or clear the controller-owned gate sandbox/cleanup state, then start a fresh repair attempt.",
   resume_condition: "Credential-free gates can execute and return application diagnostics.",
 });
+const REPAIRED_CONTROLLER_BLOCKER = Object.freeze({
+  kind: "controller_tooling",
+  message: "The Control Plane upgrade repaired the controller-owned tooling while preserving the active task and its application changes.",
+  required_action: "Run the zero-token readiness check, then use explicit Resume to retry the preserved task.",
+  resume_condition: "Readiness reports ready and the user explicitly resumes the preserved task.",
+});
 const args = parseArgs(process.argv.slice(2));
 const defaultSkillRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -314,6 +320,9 @@ async function applyTransaction({ target, skillRoot, release, previous, candidat
     if (recoveryBoundary.candidateBytes !== null) {
       assertSnapshotBound("captured recovery candidate", recoveryBoundary.candidateBytes, 64 * 1024);
     }
+    if (recoveryBoundary.maintenanceBytes !== null && recoveryBoundary.maintenanceBytes !== undefined) {
+      assertSnapshotBound("captured maintenance sentinel", recoveryBoundary.maintenanceBytes, 1024);
+    }
     if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(recoveryBoundary.currentHead ?? "")) {
       throw upgradeError("Captured recovery HEAD is invalid", "ACTIVE_TASK");
     }
@@ -422,6 +431,9 @@ async function applyTransaction({ target, skillRoot, release, previous, candidat
         ? recoveryBoundary.allowedDirty
         : [],
     });
+    if (recoveryBoundary?.kind === "controller-tool-structural" && Buffer.isBuffer(recoveryBoundary.maintenanceBytes)) {
+      await clearRecoveredMaintenanceSentinel(target, recoveryBoundary.maintenanceBytes);
+    }
     void commitResult;
     return { commit, validation, rollbackAction };
   } catch (error) {
@@ -629,6 +641,31 @@ async function assertSafeControllerBoundary(target, state, previous, { leaseOwne
     candidate?.task_id === taskId && candidate?.attempt === attempt &&
     candidate?.status === "blocked" &&
     JSON.stringify(candidate.blocker) === JSON.stringify(state.blocker);
+  const priorMigration = Array.isArray(previous?.migration_history)
+    ? previous.migration_history.at(-1)
+    : null;
+  const priorRecoveryFailure = state.last_failure_evidence?.failure;
+  const priorStructuralRecovery =
+    previous?.version === "1.6.19" &&
+    candidate === null &&
+    state.run_id === null && state.started_at === null &&
+    state.last_failure_fingerprint === null && state.no_progress_count === 0 &&
+    state.last_session === null && Array.isArray(state.session_ids) && state.session_ids.length === 0 &&
+    state.last_failure_evidence && typeof state.last_failure_evidence === "object" &&
+    !Array.isArray(state.last_failure_evidence) &&
+    Object.keys(state.last_failure_evidence).sort().join("\0") === "failure" &&
+    priorRecoveryFailure && typeof priorRecoveryFailure === "object" && !Array.isArray(priorRecoveryFailure) &&
+    Object.keys(priorRecoveryFailure).sort().join("\0") === "code\0message" &&
+    priorRecoveryFailure.code === "CONTROLLER_TOOL_RECOVERED" &&
+    typeof priorRecoveryFailure.message === "string" && priorRecoveryFailure.message.length > 0 &&
+    priorRecoveryFailure.message.length <= 1024 &&
+    priorMigration && typeof priorMigration === "object" && !Array.isArray(priorMigration) &&
+    Object.keys(priorMigration).sort().join("\0") ===
+      "applied_at\0from_version\0kind\0recovered_task\0recovery_reason\0to_version" &&
+    priorMigration.from_version === "1.6.18" && priorMigration.to_version === "1.6.19" &&
+    priorMigration.kind === "upgrade-recovery" && priorMigration.recovered_task === taskId &&
+    priorMigration.recovery_reason === "controller-tool-structural" &&
+    typeof priorMigration.applied_at === "string" && Number.isFinite(Date.parse(priorMigration.applied_at));
   const dependencyFault = trustedControllerFault && state.last_failure_evidence.controller_faults
     .some((fault) => fault.operation === "dependency-lock");
   const dependencyBoundaryApproved =
@@ -642,8 +679,9 @@ async function assertSafeControllerBoundary(target, state, previous, { leaseOwne
     attempt >= 0 && typeof state.baseline_head === "string" && state.baseline_head === head &&
     queue?.project_status === "blocked" && task?.status === "blocked" &&
     Array.isArray(task?.allowed_paths) &&
-    (legacyControllerFault || trustedControllerFault) &&
+    (legacyControllerFault || trustedControllerFault || priorStructuralRecovery) &&
     (!legacyControllerFault || dependencyBoundaryApproved) &&
+    (!priorStructuralRecovery || dependencyBoundaryApproved) &&
     (!dependencyFault || dependencyBoundaryApproved);
   if (structuralControllerFault) {
     for (const artifact of ["review.json", "mode-intent.json"]) {
@@ -695,11 +733,18 @@ async function assertSafeControllerBoundary(target, state, previous, { leaseOwne
     if (JSON.stringify(queue) !== JSON.stringify(expectedQueue)) {
       throw upgradeError("The controller-tool queue contains changes beyond deterministic readiness and runtime status fields", "ACTIVE_TASK");
     }
+    const maintenanceBytes = await readManagedFile(
+      path.join(target, ".autopilot", "MAINTENANCE"),
+      { optional: true },
+    );
+    if (maintenanceBytes !== null) assertSnapshotBound("maintenance sentinel", maintenanceBytes, 1024);
     return {
       kind: "controller-tool-structural",
       taskId,
       attempt,
-      recoveryAttempt: legacyControllerFault ? Math.max(0, attempt - 1) : attempt,
+      recoveryAttempt: legacyControllerFault && !priorStructuralRecovery
+        ? Math.max(0, attempt - 1)
+        : attempt,
       baselineHead: head,
       currentHead: head,
       stateRevision: Number(state.revision ?? 0),
@@ -712,6 +757,7 @@ async function assertSafeControllerBoundary(target, state, previous, { leaseOwne
         ? null
         : await readManagedFile(path.join(target, ".autopilot", "runtime", "candidate.json")),
       candidateSummary: typeof candidate?.summary === "string" ? candidate.summary.slice(0, 1024) : null,
+      maintenanceBytes,
     };
   }
   const literalBoundaryMessage = "Allowed directory entries are not writable as prefixes, and the repository has no pre-existing apps, packages, or tests directories.";
@@ -1423,14 +1469,17 @@ async function applyStructuralControllerToolRecovery(target, boundary) {
     (boundary.candidateBytes === null && candidate !== null)
   ) throw upgradeError("Controller-tool recovery state changed during the framework upgrade", "UPGRADE_RACE");
 
-  const recoveryEvidence = current.last_failure_evidence?.controller_faults
+  const recoveryEvidence = (
+    current.last_failure_evidence?.controller_faults ||
+    current.last_failure_evidence?.failure?.code === "CONTROLLER_TOOL_RECOVERED"
+  )
     ? current.last_failure_evidence
     : {
-      failure: {
-        code: "CONTROLLER_TOOL_RECOVERED",
-        message: boundary.candidateSummary || "A controller-owned tool failure interrupted the preserved task.",
-      },
-    };
+        failure: {
+          code: "CONTROLLER_TOOL_RECOVERED",
+          message: boundary.candidateSummary || "A controller-owned tool failure interrupted the preserved task.",
+        },
+      };
   const next = {
     ...current,
     revision: Number(current.revision ?? 0) + 1,
@@ -1448,7 +1497,7 @@ async function applyStructuralControllerToolRecovery(target, boundary) {
     last_session: null,
     session_ids: [],
     baseline_head: boundary.currentHead,
-    blocker: boundary.blocker,
+    blocker: REPAIRED_CONTROLLER_BLOCKER,
     completion: null,
     finalization: null,
   };
@@ -1459,6 +1508,20 @@ async function applyStructuralControllerToolRecovery(target, boundary) {
   await atomicWriteFile(stateFile, contents);
   injectRecoveryFailure("structural-state-written");
   if (candidate !== null) await rm(candidateFile, { force: true });
+}
+
+async function clearRecoveredMaintenanceSentinel(target, expectedBytes) {
+  const maintenanceFile = path.join(target, ".autopilot", "MAINTENANCE");
+  await assertSafeDestination(target, maintenanceFile, { optional: true });
+  const currentBytes = await readManagedFile(maintenanceFile, { optional: true });
+  if (currentBytes === null) return;
+  if (!currentBytes.equals(expectedBytes)) {
+    throw upgradeError(
+      "The maintenance request changed during the framework upgrade",
+      "UPGRADE_RACE",
+    );
+  }
+  await rm(maintenanceFile, { force: true });
 }
 
 async function createRecoveryRollbackArtifact(target, boundary, upgradeCommit) {

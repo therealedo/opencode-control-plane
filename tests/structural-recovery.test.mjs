@@ -17,8 +17,14 @@ const upgrader = path.join(
   repositoryRoot,
   ".agents", "skills", "init-project", "bin", "upgrade-project.mjs",
 );
+const repairedControllerBlocker = {
+  kind: "controller_tooling",
+  message: "The Control Plane upgrade repaired the controller-owned tooling while preserving the active task and its application changes.",
+  required_action: "Run the zero-token readiness check, then use explicit Resume to retry the preserved task.",
+  resume_condition: "Readiness reports ready and the user explicitly resumes the preserved task.",
+};
 
-async function nextReleaseSkill(t) {
+async function nextReleaseSkill(t, version = "1.6.20") {
   const parent = await mkdtemp(path.join(os.tmpdir(), "ocp-structural-release-"));
   t.after(() => rm(parent, { recursive: true, force: true }));
   const source = path.join(repositoryRoot, ".agents", "skills");
@@ -26,7 +32,7 @@ async function nextReleaseSkill(t) {
   await cp(path.join(source, "evolve-project"), path.join(parent, "evolve-project"), { recursive: true });
   const releaseFile = path.join(parent, "init-project", "assets", "control-plane-release.json");
   const release = await readJson(releaseFile);
-  release.version = "1.6.19";
+  release.version = version;
   await writeJson(releaseFile, release);
   return path.join(parent, "init-project");
 }
@@ -58,6 +64,7 @@ test("v1.6.18 free-form controller faults recover structurally with work preserv
   const stateFile = path.join(root, ".autopilot", "state.json");
   const queueFile = path.join(root, ".project", "plan", "queue.json");
   const candidateFile = path.join(root, ".autopilot", "runtime", "candidate.json");
+  const maintenanceFile = path.join(root, ".autopilot", "MAINTENANCE");
   const state = await readJson(stateFile);
   const queue = await readJson(queueFile);
   queue.tasks.M001.allowed_paths = ["package.json", "pnpm-lock.yaml", "apps/**"];
@@ -105,6 +112,7 @@ test("v1.6.18 free-form controller faults recover structurally with work preserv
   await writeFile(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\nsettings: {}\nimporters:\n  .: {}\n", "utf8");
   await mkdir(path.join(root, "apps"), { recursive: true });
   await writeFile(path.join(root, "apps", "preserved.txt"), "preserved workspace\n", "utf8");
+  await writeFile(maintenanceFile, "requested\n", "utf8");
 
   await writeFile(path.join(root, "outside.txt"), "must fail closed\n", "utf8");
   const rejected = await invoke(root, sourceSkill, ["--dry-run"]);
@@ -128,7 +136,10 @@ test("v1.6.18 free-form controller faults recover structurally with work preserv
   assert.equal(recovered.attempt, 1);
   assert.equal(recovered.baseline_head, output.commit);
   assert.equal(recovered.last_failure_evidence.failure.code, "CONTROLLER_TOOL_RECOVERED");
+  assert.deepEqual(recovered.blocker, repairedControllerBlocker);
   await assert.rejects(readFile(candidateFile), { code: "ENOENT" });
+  await assert.rejects(readFile(maintenanceFile), { code: "ENOENT" });
+  assert.deepEqual(await readFile(queueFile), preUpgradeQueueBytes);
   assert.equal(await readFile(path.join(root, "apps", "preserved.txt"), "utf8"), "preserved workspace\n");
   const manifest = await readJson(path.join(root, ".autopilot", "control-plane.json"));
   assert.equal(manifest.migration_history.at(-1).recovery_reason, "controller-tool-structural");
@@ -166,6 +177,7 @@ test("a recovery fault after the first runtime mutation restores the exact pre-u
   const queueFile = path.join(root, ".project", "plan", "queue.json");
   const candidateFile = path.join(root, ".autopilot", "runtime", "candidate.json");
   const manifestFile = path.join(root, ".autopilot", "control-plane.json");
+  const maintenanceFile = path.join(root, ".autopilot", "MAINTENANCE");
   const state = await readJson(stateFile);
   const queue = await readJson(queueFile);
   queue.tasks.M001.allowed_paths = ["package.json", "pnpm-lock.yaml", "apps/**"];
@@ -210,6 +222,7 @@ test("a recovery fault after the first runtime mutation restores the exact pre-u
   await writeFile(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\nsettings: {}\nimporters:\n  .: {}\n", "utf8");
   await mkdir(path.join(root, "apps"), { recursive: true });
   await writeFile(path.join(root, "apps", "preserved.txt"), "preserved workspace\n", "utf8");
+  await writeFile(maintenanceFile, "requested\n", "utf8");
 
   const before = {
     head: await git(root, ["rev-parse", "HEAD"]),
@@ -218,6 +231,7 @@ test("a recovery fault after the first runtime mutation restores the exact pre-u
     candidate: await readFile(candidateFile),
     manifest: await readFile(manifestFile),
     controller: await readFile(path.join(root, ".autopilot", "bin", "lib", "controller.mjs")),
+    maintenance: await readFile(maintenanceFile),
   };
   const failed = await run([
     process.execPath,
@@ -241,7 +255,109 @@ test("a recovery fault after the first runtime mutation restores the exact pre-u
   assert.deepEqual(await readFile(candidateFile), before.candidate);
   assert.deepEqual(await readFile(manifestFile), before.manifest);
   assert.deepEqual(await readFile(path.join(root, ".autopilot", "bin", "lib", "controller.mjs")), before.controller);
+  assert.deepEqual(await readFile(maintenanceFile), before.maintenance);
   assert.equal(await readFile(path.join(root, "apps", "preserved.txt"), "utf8"), "preserved workspace\n");
+});
+
+test("v1.6.19 structural recovery bridge clears stale maintenance without a second refund", async (t) => {
+  const root = await createScaffold(t, { ready: true });
+  const sourceSkill = await nextReleaseSkill(t, "1.6.20");
+  const stateFile = path.join(root, ".autopilot", "state.json");
+  const queueFile = path.join(root, ".project", "plan", "queue.json");
+  const candidateFile = path.join(root, ".autopilot", "runtime", "candidate.json");
+  const manifestFile = path.join(root, ".autopilot", "control-plane.json");
+  const maintenanceFile = path.join(root, ".autopilot", "MAINTENANCE");
+  const state = await readJson(stateFile);
+  const queue = await readJson(queueFile);
+  const manifest = await readJson(manifestFile);
+
+  queue.tasks.M001.allowed_paths = ["package.json", "pnpm-lock.yaml", "apps/**"];
+  manifest.version = "1.6.19";
+  manifest.migration_history.push({
+    from_version: "1.6.18",
+    to_version: "1.6.19",
+    applied_at: "2026-07-27T00:38:16.433Z",
+    kind: "upgrade-recovery",
+    recovered_task: "M001",
+    recovery_reason: "controller-tool-structural",
+  });
+  await writeJson(queueFile, queue);
+  await writeJson(manifestFile, manifest);
+  await git(root, ["add", ".project/plan/queue.json", ".autopilot/control-plane.json"]);
+  await git(root, ["commit", "-m", "test: model the v1.6.19 structural recovery boundary"]);
+  const baseline = await git(root, ["rev-parse", "HEAD"]);
+  const blocker = {
+    kind: "controller_tooling",
+    message: "The pre-v1.6.19 controller could not complete dependency resolution.",
+    required_action: "Upgrade the controller-owned dependency and gate tools.",
+    resume_condition: "The controller can retry the preserved task.",
+  };
+  Object.assign(state, {
+    revision: state.revision + 1,
+    run_id: null,
+    status: "human_required",
+    phase: "blocked",
+    pid: null,
+    started_at: null,
+    active_task: "M001",
+    attempt: 1,
+    no_progress_count: 0,
+    last_progress_hash: null,
+    last_failure_fingerprint: null,
+    last_failure_evidence: {
+      failure: {
+        code: "CONTROLLER_TOOL_RECOVERED",
+        message: "The first structural upgrade preserved the dependency workspace.",
+      },
+    },
+    last_session: null,
+    session_ids: [],
+    baseline_head: baseline,
+    blocker,
+  });
+  queue.revision += 1;
+  queue.project_status = "blocked";
+  queue.tasks.M001.status = "blocked";
+  await writeJson(stateFile, state);
+  await writeJson(queueFile, queue);
+  await rm(candidateFile, { force: true });
+  await writeFile(path.join(root, "package.json"), "{\"private\":true,\"packageManager\":\"pnpm@11.14.0\"}\n", "utf8");
+  await writeFile(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\nsettings: {}\nimporters:\n  .: {}\n", "utf8");
+  await mkdir(path.join(root, "apps"), { recursive: true });
+  await writeFile(path.join(root, "apps", "preserved.txt"), "preserved after v1.6.19\n", "utf8");
+  await writeFile(maintenanceFile, "requested\n", "utf8");
+  const preUpgradeQueueBytes = await readFile(queueFile);
+
+  const preview = await invoke(root, sourceSkill, ["--dry-run"]);
+  assert.equal(preview.code, 0, preview.stderr || preview.stdout);
+  assert.equal(JSON.parse(preview.stdout).recovery_kind, "controller-tool-structural");
+  assert.equal(await readFile(maintenanceFile, "utf8"), "requested\n");
+
+  const result = await invoke(root, sourceSkill);
+  assert.equal(result.code, 0, result.stderr || result.stdout);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.recovery_kind, "controller-tool-structural");
+  const recovered = await readJson(stateFile);
+  assert.equal(recovered.status, "human_required");
+  assert.equal(recovered.phase, "blocked");
+  assert.equal(recovered.active_task, "M001");
+  assert.equal(recovered.attempt, 1);
+  assert.equal(recovered.baseline_head, output.commit);
+  assert.deepEqual(recovered.blocker, repairedControllerBlocker);
+  assert.equal(recovered.last_failure_evidence.failure.code, "CONTROLLER_TOOL_RECOVERED");
+  await assert.rejects(readFile(candidateFile), { code: "ENOENT" });
+  await assert.rejects(readFile(maintenanceFile), { code: "ENOENT" });
+  assert.deepEqual(await readFile(queueFile), preUpgradeQueueBytes);
+  assert.equal(await readFile(path.join(root, "apps", "preserved.txt"), "utf8"), "preserved after v1.6.19\n");
+  const upgradedManifest = await readJson(manifestFile);
+  assert.deepEqual(upgradedManifest.migration_history.at(-1), {
+    from_version: "1.6.19",
+    to_version: "1.6.20",
+    applied_at: upgradedManifest.migration_history.at(-1).applied_at,
+    kind: "upgrade-recovery",
+    recovered_task: "M001",
+    recovery_reason: "controller-tool-structural",
+  });
 });
 
 test("typed controller faults preserve an already-refunded zero attempt without dependency paths", async (t) => {

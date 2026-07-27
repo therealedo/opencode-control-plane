@@ -89,7 +89,7 @@ When an update is shown, press U once. The Control Plane will:
 5. create a reversible local Git commit in each changed project;
 6. resume only workers that were running before the update.
 
-It never kills a worker, silently adopts a legacy project, overwrites application code, or hides a failed project. If one project is dirty, unavailable, or blocked, other safe projects still update. A recognized older controller failure is passed to the guarded project upgrader only when Git and bounded state evidence prove the exact recovery is safe; every unrecognized blocked state fails closed for review.
+It never kills a worker, silently adopts a legacy project, overwrites application code, or hides a failed project. If one project is dirty, unavailable, or blocked, other safe projects still update. A recognized older controller failure is passed to the guarded project upgrader only when Git and bounded state evidence prove the exact recovery is safe; every unrecognized blocked state fails closed for review. After a structural recovery, the successful upgrade clears the maintenance request it already fulfilled, but it never starts the worker automatically: run **Check readiness**, then choose **Resume** once.
 
 ### Upgrade from Control Plane 1.0
 
@@ -129,7 +129,7 @@ Local workers are policy-bounded, not operating-system sandboxed. OpenCode and p
 - **Not ready:** open the project and choose **Check readiness**; fix the first named item, then Start.
 - **Waiting for you:** complete the exact action shown, then Resume.
 - **OpenCode asks you to sign in again:** update to v1.6.8 or newer. The worker pauses after the first authentication failure without spending an attempt; sign in, then choose **Resume**.
-- **An older project is blocked by path, Corepack, lockfile, runner, or gate errors:** choose **Update everything** and install v1.6.19 or newer. Its guarded recovery preserves proven project work and blueprint history, repairs the controller, restores eligible attempt budgets, and records rollback evidence. Reopen the project and use **Check readiness** before Resume.
+- **An older project is blocked by path, Corepack, lockfile, runner, or gate errors:** choose **Update everything** and install v1.6.20 or newer. Its guarded recovery preserves proven project work and blueprint history, repairs the controller, restores eligible attempt budgets, and records rollback evidence. Reopen the project, choose **Check readiness**, and then choose **Resume** once. A successful structural recovery clears the maintenance request it already fulfilled, so it does not immediately pause at the same maintenance boundary again.
 - **Readiness reports that the project's pinned Node version does not match your terminal:** switch the terminal to the exact supported Node major shown by Control Plane, reopen the dashboard, and check readiness again. Do not weaken the blueprint's engine requirement merely to make the warning disappear; this local environment boundary spends no worker tokens or task attempt.
 - **OpenCode failed without a useful reason:** v1.6.6 and newer retain a short sanitized diagnostic, never the raw provider output or detected credential values.
 - **Update deferred:** resolve the active blocker or dirty Git worktree, return to a safe boundary, and press U again.
