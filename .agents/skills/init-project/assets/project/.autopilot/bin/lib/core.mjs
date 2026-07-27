@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import {
   access,
   link,
@@ -422,12 +423,142 @@ export function stableJson(value) {
   return JSON.stringify(sortObject(value));
 }
 
+function probeProcess(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return "dead";
+  try {
+    process.kill(pid, 0);
+    return "live";
+  } catch (error) {
+    if (error?.code === "ESRCH") return "dead";
+    if (error?.code === "EPERM") return "live";
+    return "unknown";
+  }
+}
+
+const INCOMPLETE_LOCK_GRACE_MS = 30_000;
+
+function incompleteLockStatus(info, record = null) {
+  const age = Date.now() - Number(info.mtimeMs ?? Date.now());
+  if (!Number.isFinite(age) || age < INCOMPLETE_LOCK_GRACE_MS) {
+    return { status: "live", record, indeterminate: true };
+  }
+  return { status: "stale", record, incomplete: true };
+}
+
+export async function processStartIdentity(pid) {
+  if (probeProcess(pid) === "dead") return null;
+  if (process.platform === "linux") {
+    try {
+      const [statText, bootId] = await Promise.all([
+        readFile(`/proc/${pid}/stat`, "utf8"),
+        readFile("/proc/sys/kernel/random/boot_id", "utf8"),
+      ]);
+      const close = statText.lastIndexOf(")");
+      const fields = close >= 0 ? statText.slice(close + 2).trim().split(/\s+/) : [];
+      const startTicks = fields[19];
+      if (!/^\d+$/.test(startTicks ?? "") || !/^[0-9a-f-]{36}$/i.test(bootId.trim())) return null;
+      return `linux:${bootId.trim().toLowerCase()}:${startTicks}`;
+    } catch {
+      return null;
+    }
+  }
+  if (process.platform === "win32") {
+    const systemRoot = process.env.SystemRoot || process.env.SYSTEMROOT || "C:\\Windows";
+    const powershell = path.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    const command = [
+      "$ErrorActionPreference='Stop'",
+      `$p=Get-Process -Id ${pid}`,
+      "$p.StartTime.ToUniversalTime().Ticks.ToString([Globalization.CultureInfo]::InvariantCulture)",
+    ].join("; ");
+    const result = spawnSync(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], {
+      encoding: "utf8",
+      shell: false,
+      windowsHide: true,
+      timeout: 3000,
+      maxBuffer: 16 * 1024,
+    });
+    const ticks = String(result.stdout ?? "").trim();
+    if (result.status === 0 && /^\d{10,20}$/.test(ticks)) return `windows:${ticks}`;
+  }
+  return null;
+}
+
+export async function inspectProcessRecord(record, { expectedRoot = null } = {}) {
+  if (
+    !record || typeof record !== "object" || Array.isArray(record) ||
+    !Number.isInteger(record.pid) || record.pid <= 0
+  ) {
+    throw new AutopilotError("Controller owner record is invalid", { code: "LOCK_INTEGRITY" });
+  }
+  if (
+    expectedRoot !== null &&
+    (typeof record.root !== "string" || path.resolve(record.root) !== path.resolve(expectedRoot))
+  ) {
+    throw new AutopilotError("Controller owner record belongs to a different project root", {
+      code: "LOCK_INTEGRITY",
+    });
+  }
+  const liveness = probeProcess(record.pid);
+  if (liveness === "dead") return { status: "stale", record };
+  const recordedIdentity = typeof record.process_start_identity === "string"
+    ? record.process_start_identity
+    : null;
+  if (!recordedIdentity) return { status: "live", record, legacy: true };
+  const actualIdentity = await processStartIdentity(record.pid);
+  if (actualIdentity === null) return { status: "live", record, identity_unavailable: true };
+  return {
+    status: actualIdentity === recordedIdentity ? "live" : "stale",
+    record,
+    actual_identity: actualIdentity,
+  };
+}
+
+export async function inspectProcessLock(file, { expectedRoot = null } = {}) {
+  let info;
+  try {
+    info = await lstat(file);
+  } catch (error) {
+    if (error?.code === "ENOENT") return { status: "absent", record: null };
+    throw error;
+  }
+  if (!info.isFile() || info.isSymbolicLink() || Number(info.nlink) > 1 || info.size > 16 * 1024) {
+    throw new AutopilotError(`Controller lock path is unsafe: ${file}`, { code: "LOCK_INTEGRITY" });
+  }
+  if (info.size <= 1) return incompleteLockStatus(info);
+  let record;
+  try {
+    record = JSON.parse(await readFile(file, "utf8"));
+  } catch {
+    return incompleteLockStatus(info);
+  }
+  if (
+    !record || typeof record !== "object" || Array.isArray(record) ||
+    !Number.isInteger(record.pid) || record.pid <= 0
+  ) return incompleteLockStatus(info, record);
+  try {
+    return await inspectProcessRecord(record, { expectedRoot });
+  } catch (error) {
+    if (error?.code === "LOCK_INTEGRITY") {
+      throw new AutopilotError(`Controller lock is invalid: ${file}`, {
+        code: "LOCK_INTEGRITY",
+        details: { cause: error.message },
+      });
+    }
+    throw error;
+  }
+}
+
 export async function acquireLock(file, payload) {
   await mkdir(path.dirname(file), { recursive: true });
   for (let pass = 0; pass < 2; pass += 1) {
     try {
       const ownerToken = randomBytes(24).toString("hex");
-      const record = { ...payload, owner_token: ownerToken };
+      const processStart = await processStartIdentity(payload.pid);
+      const record = {
+        ...payload,
+        ...(processStart ? { process_start_identity: processStart } : {}),
+        owner_token: ownerToken,
+      };
       const contents = `${JSON.stringify(record)}\n`;
       const handle = await open(file, "wx", 0o600);
       await handle.writeFile(contents, "utf8");
@@ -487,29 +618,8 @@ export async function acquireLock(file, payload) {
       };
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
-      let stale = false;
-      try {
-        const info = await lstat(file);
-        if (!info.isFile() || info.isSymbolicLink() || Number(info.nlink) > 1) {
-          throw new AutopilotError(`Controller lock path is unsafe: ${file}`, {
-            code: "LOCK_INTEGRITY",
-          });
-        }
-        const existing = JSON.parse(await readFile(file, "utf8"));
-        if (!Number.isInteger(existing.pid) || existing.pid <= 0) {
-          stale = true;
-        } else {
-          try {
-            process.kill(existing.pid, 0);
-          } catch (killError) {
-            stale = killError?.code === "ESRCH";
-          }
-        }
-      } catch (readError) {
-        if (readError instanceof AutopilotError) throw readError;
-        stale = true;
-      }
-      if (!stale || pass === 1) {
+      const inspection = await inspectProcessLock(file, { expectedRoot: payload.root ?? null });
+      if (inspection.status !== "stale" || pass === 1) {
         throw new AutopilotError(`Another controller owns ${file}`, {
           code: "LOCKED",
         });

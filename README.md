@@ -89,7 +89,7 @@ When an update is shown, press U once. The Control Plane will:
 5. create a reversible local Git commit in each changed project;
 6. resume only workers that were running before the update.
 
-It never kills a worker, silently adopts a legacy project, overwrites application code, or hides a failed project. If one project is dirty, unavailable, or blocked, other safe projects still update. A narrowly recognized failure from versions 1.6.3 through 1.6.5 is passed through to the guarded project upgrader and repaired only when Git proves OpenCode created no application changes and the queue changed only its runtime status; every other blocked project still fails closed for review.
+It never kills a worker, silently adopts a legacy project, overwrites application code, or hides a failed project. If one project is dirty, unavailable, or blocked, other safe projects still update. A recognized older controller failure is passed to the guarded project upgrader only when Git and bounded state evidence prove the exact recovery is safe; every unrecognized blocked state fails closed for review.
 
 ### Upgrade from Control Plane 1.0
 
@@ -117,6 +117,7 @@ Local workers are policy-bounded, not operating-system sandboxed. OpenCode and p
 - A deterministic compiler sends only the task's selected project facts, paths, tools, and test credentials while preserving code blocks exactly.
 - Workers inspect narrowly, reuse existing/native capabilities before adding code, and reviewers reject needless files, dependencies, configuration, and abstractions without relaxing quality or safety.
 - Tests, Git transitions, status polling, upgrades, and context handoffs are deterministic and token-free.
+- Dependency resolution and later frozen installs are controller-owned and token-free; a worker is not asked to repair package-manager setup.
 - The controller derives the authoritative changed-file list once from validated Git evidence; workers do not spend output tokens describing facts the controller already knows.
 - Per-task Conventional Commit prefixes live in controller configuration, outside worker prompts.
 - Tool results and worker contracts are paginated and bounded; full evidence stays in artifacts instead of prompts.
@@ -128,11 +129,8 @@ Local workers are policy-bounded, not operating-system sandboxed. OpenCode and p
 - **Not ready:** open the project and choose **Check readiness**; fix the first named item, then Start.
 - **Waiting for you:** complete the exact action shown, then Resume.
 - **OpenCode asks you to sign in again:** update to v1.6.8 or newer. The worker pauses after the first authentication failure without spending an attempt; sign in, then choose **Resume**.
-- **A project says its allowed directories are not writable:** update to v1.6.10 or newer through **Update everything**, then choose **Resume after resolving blocker**. The guarded upgrade preserves an already blocked task, and literal task directories authorize files beneath them without widening approved paths.
-- **A Windows project is blocked because `corepack.cmd` has no PowerShell shim, or v1.6.11 preserved files but Resume reports them as unrelated changes:** update to v1.6.12 or newer through **Update everything**. The guarded recovery reconnects those files to the active task, restores its attempt budget, and launches Corepack safely. Resume only after the update finishes.
-- **A pnpm workspace is blocked because the worker cannot generate the transitive lockfile:** update to v1.6.13 or newer through **Update everything**. The guarded recovery preserves the workspace, restores the task budget, and exposes one script-free, credential-free lockfile action. Resume only after the update finishes.
-- **After v1.6.13 generated the lockfile, the controller reports `OPENCODE_TOOL_USAGE_INVALID` or incorrectly says the unit gate invoked OpenCode:** update to v1.6.14 or newer through **Update everything**, then Resume. The guarded recovery preserves the generated workspace and restores attempt 1.
-- **M001 reports controller actions misrouted or `GATE_CLEANUP_FAILED`:** from the main dashboard choose **Update everything**, install the latest release, reopen the project, then Resume. The guarded recovery preserves M001 and restores attempt 1; v1.6.18 also retries transient Windows cleanup locks.
+- **An older project is blocked by path, Corepack, lockfile, runner, or gate errors:** choose **Update everything** and install v1.6.19 or newer. Its guarded recovery preserves proven project work and blueprint history, repairs the controller, restores eligible attempt budgets, and records rollback evidence. Reopen the project and use **Check readiness** before Resume.
+- **Readiness reports that the project's pinned Node version does not match your terminal:** switch the terminal to the exact supported Node major shown by Control Plane, reopen the dashboard, and check readiness again. Do not weaken the blueprint's engine requirement merely to make the warning disappear; this local environment boundary spends no worker tokens or task attempt.
 - **OpenCode failed without a useful reason:** v1.6.6 and newer retain a short sanitized diagnostic, never the raw provider output or detected credential values.
 - **Update deferred:** resolve the active blocker or dirty Git worktree, return to a safe boundary, and press U again.
 - **Managed-file drift:** do not force the update. Restore or review the named Control Plane-owned file first.

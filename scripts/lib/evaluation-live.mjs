@@ -1111,14 +1111,16 @@ function controllerTelemetry(toolUsage) {
   const usages = [];
   for (const [phase, entry] of entries) {
     const model = entry?.model_usage;
-    const usage = model ? {
+    const prior = entry?.prior_model_usage;
+    const complete = Boolean(model) && (!prior || prior.complete === true);
+    const usage = complete ? {
       status: "complete",
-      input_tokens: model.input_tokens,
-      output_tokens: model.output_tokens,
-      reasoning_tokens: model.reasoning_tokens,
-      cache_read_tokens: model.cache_read_tokens,
-      cache_write_tokens: model.cache_write_tokens,
-      provider_cost: model.cost,
+      input_tokens: model.input_tokens + Number(prior?.input_tokens ?? 0),
+      output_tokens: model.output_tokens + Number(prior?.output_tokens ?? 0),
+      reasoning_tokens: model.reasoning_tokens + Number(prior?.reasoning_tokens ?? 0),
+      cache_read_tokens: model.cache_read_tokens + Number(prior?.cache_read_tokens ?? 0),
+      cache_write_tokens: model.cache_write_tokens + Number(prior?.cache_write_tokens ?? 0),
+      provider_cost: model.cost + Number(prior?.cost ?? 0),
     } : emptyUsage("unavailable");
     sessions[phase] = { phase, status: usage.status, usage: Object.fromEntries(Object.entries(usage).filter(([key]) => key !== "status")) };
     usages.push(usage);
@@ -1130,8 +1132,11 @@ function controllerTelemetry(toolUsage) {
     status,
     comparable: status === "complete",
     expected_sessions: entries.map(([phase]) => phase),
-    observed_sessions: entries.filter(([, entry]) => plainObject(entry?.model_usage)).map(([phase]) => phase),
-    session_count: entries.length,
+    observed_sessions: entries.filter(([, entry]) =>
+      plainObject(entry?.model_usage) && (!entry.prior_model_usage || entry.prior_model_usage.complete === true))
+      .map(([phase]) => phase),
+    session_count: entries.reduce((total, [, entry]) =>
+      total + 1 + Number(entry?.prior_model_usage?.dispatches ?? 0), 0),
     step_count: null,
     usage: Object.fromEntries(Object.entries(aggregate).filter(([key]) => key !== "status")),
     sessions,

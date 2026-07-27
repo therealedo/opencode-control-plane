@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { existsSync, lstatSync, statSync } from "node:fs";
-import { lstat, realpath } from "node:fs/promises";
+import { lstat, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AutopilotError, truncateUtf8 } from "./core.mjs";
@@ -10,6 +12,8 @@ const MAX_EXECUTION_PATH_BYTES = 32 * 1024;
 const MAX_EXECUTION_PATH_ENTRIES = 128;
 const WINDOWS_EXECUTABLE_SUFFIXES = [".exe", ".com", ".cmd", ".bat", ".ps1", ""];
 const PROJECT_SCRIPT_EXTENSION = /\.(?:[cm]?js|jsx|tsx?|py|rb|php|pl|sh|bash|zsh|fish|ps1|cmd|bat|exe|com)$/i;
+const WINDOWS_GUARD_STOP_GRACE_MS = 7_500;
+const WINDOWS_GUARD_KILL_TIMEOUT_MS = 7_500;
 const gitSafeAmbientConfigCache = new Map();
 
 function foldedPath(value) {
@@ -478,6 +482,111 @@ function terminateProcessTree(child, signal = "SIGTERM") {
   }
 }
 
+function delay(milliseconds) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, milliseconds);
+    timer.unref();
+  });
+}
+
+function windowsGuardProtocol() {
+  const nonce = `${process.pid}-${randomBytes(24).toString("hex")}`;
+  const temporary = os.tmpdir();
+  return {
+    stopFile: path.join(temporary, `autopilot-guard-stop-${nonce}`),
+    acknowledgementFile: path.join(temporary, `autopilot-guard-ack-${nonce}`),
+    acknowledgementToken: randomBytes(32).toString("hex"),
+  };
+}
+
+async function boundedTaskkill(child) {
+  if (!child.pid) {
+    throw new AutopilotError("Windows process guard has no process ID", {
+      code: "PROCESS_GUARD_STOP_FAILED",
+    });
+  }
+  const killer = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
+    windowsHide: true,
+    shell: false,
+    stdio: "ignore",
+  });
+  let timeout;
+  try {
+    const result = await Promise.race([
+      new Promise((resolve, reject) => {
+        killer.once("error", reject);
+        killer.once("close", (code, signal) => resolve({ code, signal }));
+      }),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => {
+          killer.kill();
+          reject(new AutopilotError("Windows process-tree termination exceeded its fixed bound", {
+            code: "PROCESS_GUARD_STOP_FAILED",
+          }));
+        }, WINDOWS_GUARD_KILL_TIMEOUT_MS);
+      }),
+    ]);
+    return result;
+  } catch (error) {
+    if (error instanceof AutopilotError) throw error;
+    throw new AutopilotError(`Windows process-tree termination failed: ${error.message}`, {
+      code: "PROCESS_GUARD_STOP_FAILED",
+    });
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function requestWindowsGuardStop(protocol, child, childClosed) {
+  try {
+    await writeFile(protocol.stopFile, "stop\n", { flag: "wx", mode: 0o600 });
+  } catch (error) {
+    if (error?.code !== "EEXIST") {
+      throw new AutopilotError(`Could not signal the Windows process guard: ${error.message}`, {
+        code: "PROCESS_GUARD_STOP_FAILED",
+      });
+    }
+  }
+  const cooperative = await Promise.race([
+    childClosed.then(() => true, () => true),
+    delay(WINDOWS_GUARD_STOP_GRACE_MS).then(() => false),
+  ]);
+  if (cooperative) return { fallback_quiesced: false };
+
+  const killed = await boundedTaskkill(child);
+  const closed = await Promise.race([
+    childClosed.then(() => true, () => true),
+    delay(WINDOWS_GUARD_KILL_TIMEOUT_MS).then(() => false),
+  ]);
+  if (!closed || killed.code !== 0) {
+    throw new AutopilotError("Windows process guard could not prove bounded descendant termination", {
+      code: "PROCESS_GUARD_STOP_FAILED",
+      details: { taskkill_code: killed.code, taskkill_signal: killed.signal, child_closed: closed },
+    });
+  }
+  return { fallback_quiesced: true };
+}
+
+async function assertWindowsGuardQuiesced(protocol, { fallbackQuiesced = false } = {}) {
+  let acknowledgement = null;
+  try { acknowledgement = await readFile(protocol.acknowledgementFile, "utf8"); }
+  catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  if (acknowledgement === protocol.acknowledgementToken || fallbackQuiesced) return;
+  throw new AutopilotError("Windows process guard exited without proving descendant quiescence", {
+    code: "PROCESS_GUARD_UNVERIFIED",
+  });
+}
+
+async function cleanupWindowsGuardProtocol(protocol) {
+  if (!protocol) return;
+  await Promise.allSettled([
+    rm(protocol.stopFile, { force: true }),
+    rm(protocol.acknowledgementFile, { force: true }),
+  ]);
+}
+
 export async function runArgv(argv, {
   cwd,
   env = safeBaseEnv(),
@@ -486,6 +595,7 @@ export async function runArgv(argv, {
   input = null,
   allowMultilineArgs = false,
   guardProcessTree = false,
+  onSpawn = null,
 } = {}) {
   if (
     !Array.isArray(argv) ||
@@ -516,8 +626,16 @@ export async function runArgv(argv, {
       code: "PROCESS_LIMIT_INVALID",
     });
   }
+  if (onSpawn !== null && typeof onSpawn !== "function") {
+    throw new AutopilotError("Process spawn callback must be a function", {
+      code: "PROCESS_LIMIT_INVALID",
+    });
+  }
   const invocation = resolveWindowsInvocation(argv, cwd, env);
   const guard = fileURLToPath(new URL("../process-guard.mjs", import.meta.url));
+  const guardProtocol = guardProcessTree && process.platform === "win32"
+    ? windowsGuardProtocol()
+    : null;
   const guardedInvocation = guardProcessTree
     ? {
       command: process.execPath,
@@ -526,12 +644,18 @@ export async function runArgv(argv, {
     : invocation;
   const child = spawn(guardedInvocation.command, guardedInvocation.args, {
     cwd,
-    env,
+    env: guardProtocol ? {
+      ...env,
+      AUTOPILOT_GUARD_STOP_FILE: guardProtocol.stopFile,
+      AUTOPILOT_GUARD_ACK_FILE: guardProtocol.acknowledgementFile,
+      AUTOPILOT_GUARD_ACK_TOKEN: guardProtocol.acknowledgementToken,
+    } : env,
     detached: process.platform !== "win32",
     shell: false,
     windowsHide: true,
     stdio: [input === null ? "ignore" : "pipe", "pipe", "pipe"],
   });
+  if (onSpawn) child.once("spawn", onSpawn);
   const stdout = [];
   const stderr = [];
   let stdoutBytes = 0;
@@ -559,9 +683,18 @@ export async function runArgv(argv, {
   }
   let timedOut = false;
   let escalationTimer = null;
+  let stopTask = null;
+  let rejectStopFailure;
+  const stopFailure = new Promise((_, reject) => { rejectStopFailure = reject; });
+  const childClosed = once(child, "close");
   const timer = setTimeout(() => {
     timedOut = true;
-    terminateProcessTree(child, "SIGTERM");
+    if (guardProtocol) {
+      stopTask = requestWindowsGuardStop(guardProtocol, child, childClosed);
+      stopTask.catch(rejectStopFailure);
+    } else {
+      terminateProcessTree(child, "SIGTERM");
+    }
     if (process.platform !== "win32") {
       escalationTimer = setTimeout(() => terminateProcessTree(child, "SIGKILL"), 2_000);
       escalationTimer.unref();
@@ -571,14 +704,22 @@ export async function runArgv(argv, {
   let code;
   let signal;
   try {
-    [code, signal] = await once(child, "close");
+    [code, signal] = await Promise.race([childClosed, stopFailure]);
+    const stopResult = stopTask ? await stopTask : null;
+    if (guardProtocol) {
+      await assertWindowsGuardQuiesced(guardProtocol, {
+        fallbackQuiesced: stopResult?.fallback_quiesced === true,
+      });
+    }
   } catch (error) {
+    if (error instanceof AutopilotError) throw error;
     throw new AutopilotError(`Could not execute ${argv[0]}: ${error.message}`, {
       code: "PROCESS_START_FAILED",
     });
   } finally {
     clearTimeout(timer);
     if (escalationTimer) clearTimeout(escalationTimer);
+    await cleanupWindowsGuardProtocol(guardProtocol);
   }
   return {
     argv: [...argv],

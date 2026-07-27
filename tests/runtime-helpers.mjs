@@ -179,11 +179,12 @@ export async function filesUnder(root) {
   return output
 }
 
-export async function run(argv, { cwd, env } = {}) {
+export async function run(argv, { cwd, env, timeoutMs = 300_000 } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(argv[0], argv.slice(1), {
       cwd,
       env: env ?? process.env,
+      detached: process.platform !== "win32",
       shell: false,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -192,8 +193,32 @@ export async function run(argv, { cwd, env } = {}) {
     const stderr = []
     child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)))
     child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)))
-    child.once("error", reject)
+    let timedOut = false
+    const timer = setTimeout(() => {
+      timedOut = true
+      if (process.platform === "win32" && child.pid) {
+        const killer = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
+          windowsHide: true,
+          shell: false,
+          stdio: "ignore",
+        })
+        killer.once("error", () => child.kill())
+        killer.once("close", (code) => { if (code !== 0) child.kill() })
+      } else if (child.pid) {
+        try { process.kill(-child.pid, "SIGKILL") } catch { child.kill("SIGKILL") }
+      }
+    }, timeoutMs)
+    timer.unref()
+    child.once("error", (error) => {
+      clearTimeout(timer)
+      reject(error)
+    })
     child.once("close", (code, signal) => {
+      clearTimeout(timer)
+      if (timedOut) {
+        reject(new Error(`Test child exceeded ${timeoutMs} ms: ${argv.join(" ")}`))
+        return
+      }
       resolve({
         code,
         signal,

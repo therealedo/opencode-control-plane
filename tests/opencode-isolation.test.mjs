@@ -232,7 +232,23 @@ try {
 } catch (error) {
   if (error?.code !== "ENOENT") throw error
 }
+if (launchFailureMode === "controller-fault-exit") {
+  toolUsage.tool_calls = 2
+  toolUsage.returned_bytes = 88
+  toolUsage.by_tool = {
+    lockfile: { calls: 1, returned_bytes: 64 },
+    contract: { calls: 1, returned_bytes: 24 },
+  }
+  toolUsage.controller_faults = [{
+    operation: "dependency-lock",
+    error_code: "DEPENDENCY_RUNNER_PROTOCOL_INVALID",
+  }]
+}
 await writeFile(toolPolicy.usage_path, JSON.stringify(toolUsage) + "\n", "utf8")
+if (launchFailureMode === "controller-fault-exit") {
+  process.stderr.write("controller tool stopped the phase\n")
+  process.exit(7)
+}
 const observationsFile = path.join(runtime, "isolation-observations.json")
 let observations = []
 try { observations = JSON.parse(await readFile(observationsFile, "utf8")) }
@@ -1000,7 +1016,12 @@ test("autopilot_check returns bounded gate feedback and enforces the two-call ph
   await mkdir(path.join(root, "src"), { recursive: true })
   await writeFile(path.join(root, "src", "result.txt"), "GOOD\n", "utf8")
   const passed = JSON.parse(await tools.check.execute({ gate_id: "task" }))
-  assert.deepEqual(Object.keys(passed), ["gate_id", "success", "code", "timed_out", "duration_ms"])
+  assert.equal(passed.schema_version, 1)
+  assert.equal(passed.operation, "gate")
+  assert.equal(passed.classification, "success")
+  assert.equal(passed.error_code, null)
+  assert.equal(passed.gate_id, "task")
+  assert.equal(Object.hasOwn(passed, "diagnostic"), false)
   assert.equal(passed.success, true)
   await assert.rejects(tools.check.execute({ gate_id: "task" }), /limited to 2 calls/)
   const usage = await readJson(usageFile)
@@ -1020,6 +1041,7 @@ test("autopilot_lockfile runs one controller-owned dependency action and enforce
   const proxyMarker = path.join(profile, "controller-node-proxy.used")
   await copyFile(path.join(root, ".autopilot", "bin", "opencode-tools.mjs"), copiedTool)
   await writeFile(actionRunner, `process.stdout.write(JSON.stringify({
+    schema_version: 1, operation: "dependency-lock", classification: "success", error_code: null,
     action: "dependency-lock", package_manager: "pnpm@11.14.0", success: true,
     code: 0, timed_out: false, duration_ms: 12,
     diagnostic: { stdout: "resolved", stderr: "", output_truncated: false }
@@ -1621,12 +1643,96 @@ test("failed OpenCode launches retain only a bounded sanitized diagnostic", asyn
         return true
       },
     )
+    await writeFile(path.join(root, ".autopilot", "runtime", "launch-failure-mode.txt"), "controller-fault-exit\n", "utf8")
+    await assert.rejects(
+      isolatedModule.runFreshOpenCode(project, "Stage: execute\nTask: M001\nAttempt: 3\n", {
+        phase: "execute",
+        taskId: "M001",
+        attempt: 3,
+        baseline: await git(root, ["rev-parse", "HEAD"]),
+      }),
+      (error) => {
+        assert.equal(error?.code, "OPENCODE_FAILED")
+        assert.deepEqual(error?.controller_tool_usage?.controller_faults, [{
+          operation: "dependency-lock",
+          error_code: "DEPENDENCY_RUNNER_PROTOCOL_INVALID",
+        }])
+        return true
+      },
+    )
   } finally {
     if (previousData === undefined) delete process.env.XDG_DATA_HOME
     else process.env.XDG_DATA_HOME = previousData
     if (previousAuth === undefined) delete process.env.OPENCODE_AUTH_CONTENT
     else process.env.OPENCODE_AUTH_CONTENT = previousAuth
   }
+})
+
+test("a controller tool fault survives a failed OpenCode process and refunds the semantic attempt", async (t) => {
+  const root = await createScaffold(t, { ready: true })
+  await configureIsolationProject(t, root)
+  await writeFile(
+    path.join(root, ".autopilot", "runtime", "launch-failure-mode.txt"),
+    "controller-fault-exit\n",
+    "utf8",
+  )
+  const environment = await sterileControllerEnvironment(root)
+  const result = await run(
+    [process.execPath, path.join(root, ".autopilot", "bin", "autopilot.mjs"), "start"],
+    { cwd: root, env: environment },
+  )
+  assert.equal(result.code, 0, result.stderr || result.stdout)
+  const state = await readJson(path.join(root, ".autopilot", "state.json"))
+  assert.equal(state.status, "human_required", JSON.stringify(state, null, 2))
+  assert.equal(state.phase, "blocked")
+  assert.equal(state.active_task, "M001")
+  assert.equal(state.attempt, 0)
+  assert.equal(state.blocker?.kind, "controller_tooling")
+  assert.equal(state.blocker?.error_code, "DEPENDENCY_RUNNER_PROTOCOL_INVALID")
+  assert.deepEqual(state.last_failure_evidence?.controller_faults, [{
+    operation: "dependency-lock",
+    error_code: "DEPENDENCY_RUNNER_PROTOCOL_INVALID",
+  }])
+  assert.deepEqual(
+    state.task_tool_usage?.["execute:a1"]?.controller_faults,
+    state.last_failure_evidence.controller_faults,
+  )
+})
+
+test("cleanup failure outranks a simultaneous tool fault without erasing its usage", async (t) => {
+  const root = await createScaffold(t, { ready: true })
+  await configureIsolationProject(t, root)
+  await writeFile(
+    path.join(root, ".autopilot", "runtime", "launch-failure-mode.txt"),
+    "controller-fault-exit\n",
+    "utf8",
+  )
+  const environment = await sterileControllerEnvironment(root)
+  const result = await run(
+    [process.execPath, path.join(root, ".autopilot", "bin", "autopilot.mjs"), "start"],
+    {
+      cwd: root,
+      env: {
+        ...environment,
+        NODE_ENV: "test",
+        AUTOPILOT_TEST_FAIL_PHASE_CLEANUP: "execute",
+      },
+    },
+  )
+  assert.equal(result.code, 0, result.stderr || result.stdout)
+  const state = await readJson(path.join(root, ".autopilot", "state.json"))
+  assert.equal(state.status, "human_required", JSON.stringify(state, null, 2))
+  assert.equal(state.attempt, 0)
+  assert.equal(state.blocker?.kind, "controller_tooling")
+  assert.equal(state.blocker?.error_code, "OPENCODE_CLEANUP_FAILED")
+  assert.deepEqual(state.last_failure_evidence?.controller_faults, [{
+    operation: "opencode-runtime",
+    error_code: "OPENCODE_CLEANUP_FAILED",
+  }])
+  assert.deepEqual(state.task_tool_usage?.["execute:a1"]?.controller_faults, [{
+    operation: "dependency-lock",
+    error_code: "DEPENDENCY_RUNNER_PROTOCOL_INVALID",
+  }])
 })
 
 test("fresh phases use pure sterile profiles and file-substituted MCP credentials", async (t) => {

@@ -374,7 +374,9 @@ function confirmationFor(action) {
 
 function firstPreflightProblem(value) {
   if (!value) return "Readiness check returned no report.";
-  const issue = value.validation?.issues?.[0] ?? value.structure?.error ?? value.git?.error ?? value.opencode?.error ?? value.phases?.find((item) => !item.ok)?.error ?? value.gates?.find((item) => !item.ok)?.error;
+  const issue = value.validation?.issues?.[0] ?? value.structure?.error ?? value.git?.error ??
+    value.opencode?.error ?? value.controller_tools?.error ?? value.dependency?.error ??
+    value.phases?.find((item) => !item.ok)?.error ?? value.gates?.find((item) => !item.ok)?.error;
   return issue?.message ? `Not ready: ${safeText(issue.message, 600)}` : "Not ready. Review the preflight report in the project terminal.";
 }
 

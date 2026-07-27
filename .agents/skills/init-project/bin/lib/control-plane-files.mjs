@@ -172,6 +172,7 @@ export function assertManagedPath(relative) {
   if (
     typeof relative !== "string" ||
     !relative ||
+    /(?:edit conflict|conflicted copy)/i.test(relative) ||
     relative.includes("\\") ||
     relative.includes("\0") ||
     path.posix.isAbsolute(relative) ||

@@ -1033,7 +1033,7 @@ test("agent-authored contracts reject secrets, oversized prose, and non-name env
   assert.match(JSON.stringify(contracts.validateTaskToolUsage(usage, { taskId: "M001" })), /aggregate counters/)
 })
 
-test("optional model telemetry is omitted before the task usage ledger reaches 24 KiB", async () => {
+test("task usage compacts old dispatches without losing provider telemetry", async () => {
   const contracts = await import(pathToFileURL(path.join(templateRoot, ".autopilot", "bin", "lib", "contracts.mjs")).href)
   const taskId = "M".repeat(128)
   const tools = ["read", "list", "search", "write", "edit", "mutate", "check", "lockfile", "contract"]
@@ -1049,12 +1049,12 @@ test("optional model telemetry is omitted before the task usage ledger reaches 2
     returned_bytes: 0,
     by_tool: Object.fromEntries(tools.map((tool) => [tool, { calls: 0, returned_bytes: 0 }])),
     model_usage: {
-      input_tokens: Number.MAX_SAFE_INTEGER,
-      output_tokens: Number.MAX_SAFE_INTEGER,
-      reasoning_tokens: Number.MAX_SAFE_INTEGER,
-      cache_read_tokens: Number.MAX_SAFE_INTEGER,
-      cache_write_tokens: Number.MAX_SAFE_INTEGER,
-      cost: 1_000_000,
+      input_tokens: 100,
+      output_tokens: 20,
+      reasoning_tokens: 10,
+      cache_read_tokens: 50,
+      cache_write_tokens: 5,
+      cost: 0.25,
     },
   })
   const unbounded = Object.fromEntries(keys.map((key) => [key, phaseUsage(key.split(":")[0])]))
@@ -1064,11 +1064,19 @@ test("optional model telemetry is omitted before the task usage ledger reaches 2
   for (const key of keys) {
     bounded = contracts.appendBoundedTaskToolUsage(bounded, key, phaseUsage(key.split(":")[0]))
   }
-  assert.equal(Object.keys(bounded).length, 40)
+  assert.ok(Object.keys(bounded).length < 40)
   assert.ok(Buffer.byteLength(JSON.stringify(bounded), "utf8") <= 24 * 1024)
   assert.deepEqual(contracts.validateTaskToolUsage(bounded, { taskId }), [])
-  assert.equal(Object.hasOwn(bounded[keys.at(-1)], "model_usage"), false)
-  assert.ok(Object.values(bounded).some((entry) => Object.hasOwn(entry, "model_usage")))
+  assert.equal(
+    Object.values(bounded).reduce((total, entry) => total + 1 + Number(entry.prior_model_usage?.dispatches ?? 0), 0),
+    40,
+  )
+  assert.equal(
+    Object.values(bounded).reduce((total, entry) =>
+      total + Number(entry.model_usage?.input_tokens ?? 0) + Number(entry.prior_model_usage?.input_tokens ?? 0), 0),
+    4_000,
+  )
+  assert.ok(Object.values(bounded).every((entry) => entry.prior_model_usage?.complete !== false))
   assert.ok(Object.values(bounded).every((entry) => entry.by_tool.contract.returned_bytes === 0))
 })
 

@@ -116,8 +116,8 @@ test("v1.2 cuts at least 45 percent of framework-owned fixed phase context", asy
   const baseline = JSON.parse(await readFile(baselineFile, "utf8"));
   const savedRatio = 1 - total / baseline.total_bytes;
 
-  assert.deepEqual(phases, { execute: 5455, repair: 5162, review: 3051 });
-  assert.equal(total, 13668);
+  assert.deepEqual(phases, { execute: 5454, repair: 5162, review: 3051 });
+  assert.equal(total, 13667);
   assert.ok(savedRatio >= 0.45, `fixed context reduction was only ${(savedRatio * 100).toFixed(1)}%`);
   for (const phase of Object.values(report)) {
     assert.ok(phase.projected_max_bytes <= 10240);

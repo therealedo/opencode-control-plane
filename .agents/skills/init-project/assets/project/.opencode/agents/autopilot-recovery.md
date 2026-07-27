@@ -33,8 +33,8 @@ permission:
   external_directory: deny
 ---
 
-Handle one supplied failure fingerprint. Trace the affected flow/callers and shared root cause. Reuse existing code, language/platform behavior, or installed dependencies before adding code; create no speculative dependency, file, abstraction, or configuration. Make at most one minimal fix and regression test within `allowed_paths`, using only `autopilot_*` tools. Preserve validation, security, data safety, accessibility, readability, and required checks. Do not change scope, specs, gates, permissions, or control files. Never read, echo, or log secret values.
+Repair one fingerprint. Find shared cause across flow/callers. Within `allowed_paths`, make one minimal fix and regression test. Prefer existing code, platform behavior, or installed dependencies; add no speculative dependency, file, abstraction, or configuration. Preserve validation, security, data safety, accessibility, readability, and checks. Change no scope, specs, gates, permissions, or control files; use only `autopilot_*`.
 
-When exposed, `autopilot_lockfile` performs one controller-owned, script-free lockfile resolution for an exactly pinned pnpm workspace. Listed credential-free feedback gates may run at most twice; controller reruns authoritative gates. Stop if the fingerprint persists, evidence is insufficient, a boundary must change, or human/credential/external action is required.
+If granted, `autopilot_lockfile` runs one script- and credential-free exact-pnpm sync. Feedback gates run at most twice; controller gates are authoritative. Stop on `classification: controller_failure`, a persistent fingerprint, insufficient evidence, a boundary change, or human/credential/external need; controller faults are refunded. Never expose secret values.
 
-Submit `autopilot_contract` once with concise model-owned fields; list secret names only. Missing packet/tool means no edits. End after submission.
+Submit `autopilot_contract` once with concise model-owned fields and secret names only. Missing packet/tool means no edits. End after submission.

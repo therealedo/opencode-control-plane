@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   access,
   chmod,
@@ -13,7 +13,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   assertManagedPath,
   collectManagedSources,
@@ -23,6 +23,7 @@ import {
 } from "./lib/control-plane-files.mjs";
 import {
   atomicWriteFile,
+  inspectProcessLock,
   isAllowedPath,
 } from "../assets/project/.autopilot/bin/lib/core.mjs";
 import {
@@ -34,10 +35,13 @@ import {
   sanitizeProcessResult,
 } from "../assets/project/.autopilot/bin/lib/process.mjs";
 import { controllerCommitMessage } from "../assets/project/.autopilot/bin/lib/commit-policy.mjs";
+import { acquireProjectLease } from "../assets/project/.autopilot/bin/lib/git.mjs";
 
 const PROCESS_TIMEOUT_MS = 10 * 60_000;
 const PROCESS_OUTPUT_BYTES = 1024 * 1024;
 const MANIFEST_BYTES = 512 * 1024;
+const RECOVERY_ROLLBACK_BYTES = 1024 * 1024;
+const RECOVERY_ROLLBACK_PREFIX = "control-plane-upgrade-rollback-";
 const COREPACK_BLOCKER = Object.freeze({
   kind: "gate_configuration",
   message: "The authoritative gate argv resolves `corepack` to a Windows `.cmd` shim without a matching PowerShell shim; gate/control files are outside the allowed paths and may not be changed.",
@@ -71,7 +75,7 @@ const GATE_CLEANUP_BLOCKER = Object.freeze({
 const args = parseArgs(process.argv.slice(2));
 const defaultSkillRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-await main().catch((error) => {
+await main().then(output).catch((error) => {
   const result = { ok: false, error: error.message, code: error.code ?? "UPGRADE_FAILED", details: error.details ?? null };
   process.stderr.write(`${JSON.stringify(result, null, args.json ? 0 : 2)}\n`);
   process.exitCode = 1;
@@ -81,6 +85,18 @@ async function main() {
   const skillRoot = path.resolve(args.sourceSkill ?? defaultSkillRoot);
   const target = path.resolve(args.target ?? process.cwd());
   await assertStandaloneProject(target);
+  const projectLease = args.dryRun
+    ? null
+    : await acquireProjectLease(target, path.join(target, ".git", "autopilot-controller.lock"), {
+      pid: process.pid,
+      root: target,
+      started_at: new Date().toISOString(),
+    });
+  try {
+  if (args.rollbackRecovery) {
+    if (!projectLease) throw upgradeError("Recovery rollback requires the exclusive project lease", "ROLLBACK_LOCK_REQUIRED");
+    return applyRecoveryRollback(target, args.rollbackRecovery);
+  }
   const { release, entries } = await collectManagedSources(skillRoot);
   const manifestFile = path.join(target, ".autopilot", "control-plane.json");
   const previous = await readBoundedJson(manifestFile, MANIFEST_BYTES, { optional: true });
@@ -92,7 +108,9 @@ async function main() {
   }
   if (previous) await validatePreviousManifest(target, previous);
   const state = await readBoundedJson(path.join(target, ".autopilot", "state.json"), 64 * 1024, { optional: true }) ?? {};
-  const recoveryBoundary = await assertSafeControllerBoundary(target, state, previous);
+  const recoveryBoundary = await assertSafeControllerBoundary(target, state, previous, {
+    leaseOwned: projectLease !== null,
+  });
   if (previous && compareVersions(previous.version, release.version) > 0) {
     throw upgradeError(`Downgrades are not allowed (${previous.version} -> ${release.version})`, "DOWNGRADE_DENIED");
   }
@@ -135,8 +153,8 @@ async function main() {
     recovered_active_task: recoveryBoundary?.taskId ?? null,
     recovery_kind: recoveryBoundary?.kind ?? null,
   };
-  if (args.dryRun) return output(preview);
-  if (!preview.changed) return output({ ...preview, commit: null, rollback: null });
+  if (args.dryRun) return preview;
+  if (!preview.changed) return { ...preview, commit: null, rollback: null };
 
   if (args.interview) {
     const transaction = await applyInterviewRefresh({
@@ -148,14 +166,14 @@ async function main() {
       candidates,
       manifestFile,
     });
-    return output({
+    return {
       ...preview,
       interview_refreshed: true,
       commit: null,
       rollback: "The normal initialization baseline commit will capture the refreshed framework.",
       validation: transaction.validation,
       cleanup_warnings: transaction.cleanupWarnings,
-    });
+    };
   }
 
   const transaction = await applyTransaction({
@@ -168,12 +186,15 @@ async function main() {
     manifestFile,
     recoveryBoundary,
   });
-  output({
+  return {
     ...preview,
     commit: transaction.commit,
-    rollback: `git revert ${transaction.commit}`,
+    rollback: transaction.rollbackAction ?? `git revert ${transaction.commit}`,
     validation: transaction.validation,
-  });
+  };
+  } finally {
+    if (projectLease) await projectLease.release();
+  }
 }
 
 async function applyInterviewRefresh({ target, skillRoot, release, entries, previous, candidates, manifestFile }) {
@@ -286,6 +307,17 @@ async function applyTransaction({ target, skillRoot, release, previous, candidat
   let committed = false;
   let stagedByGit = false;
   let recoveryApplied = false;
+  let rollbackAction = null;
+  if (isActiveTaskRecovery(recoveryBoundary) || requiresRecoveryBaselineAdvance(recoveryBoundary)) {
+    assertSnapshotBound("captured recovery state", recoveryBoundary.stateBytes, 64 * 1024);
+    assertSnapshotBound("captured recovery queue", recoveryBoundary.queueBytes, MANIFEST_BYTES);
+    if (recoveryBoundary.candidateBytes !== null) {
+      assertSnapshotBound("captured recovery candidate", recoveryBoundary.candidateBytes, 64 * 1024);
+    }
+    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(recoveryBoundary.currentHead ?? "")) {
+      throw upgradeError("Captured recovery HEAD is invalid", "ACTIVE_TASK");
+    }
+  }
   try {
     for (const [relative, bytes] of candidates) {
       const destination = resolveManaged(target, relative);
@@ -305,12 +337,16 @@ async function applyTransaction({ target, skillRoot, release, previous, candidat
     await performSwaps(swaps);
     if (await exists(path.join(target, "control-plane"))) await chmod(path.join(target, "control-plane"), 0o755);
 
-    if (["exhausted-corepack-shim", "v1611-corepack-reset-repair", "v1612-dependency-lock", "v1613-lockfile-telemetry", "v1614-controller-runner", "v1617-gate-cleanup"].includes(recoveryBoundary?.kind)) {
+    await validateInstalledControllerRuntime(target);
+    if (recoveryBoundary?.kind === "controller-tool-structural") {
+      recoveryApplied = true;
+      await applyStructuralControllerToolRecovery(target, recoveryBoundary);
+    } else if (["exhausted-corepack-shim", "v1611-corepack-reset-repair", "v1612-dependency-lock", "v1613-lockfile-telemetry", "v1614-controller-runner", "v1617-gate-cleanup"].includes(recoveryBoundary?.kind)) {
+      recoveryApplied = true;
       await applyCorepackActiveRecovery(target, recoveryBoundary);
-      recoveryApplied = true;
     } else if (isExhaustedRecovery(recoveryBoundary)) {
-      await applyExhaustedRecovery(target, recoveryBoundary);
       recoveryApplied = true;
+      await applyExhaustedRecovery(target, recoveryBoundary);
     }
 
     const installedAt = new Date().toISOString();
@@ -368,7 +404,11 @@ async function applyTransaction({ target, skillRoot, release, previous, candidat
     const commit = (await git(target, ["rev-parse", "HEAD"])).stdout.trim();
     committed = true;
     if (requiresRecoveryBaselineAdvance(recoveryBoundary)) {
+      recoveryApplied = true;
       await advanceRecoveryBaseline(target, recoveryBoundary, commit);
+    }
+    if (isActiveTaskRecovery(recoveryBoundary)) {
+      rollbackAction = await createRecoveryRollbackArtifact(target, recoveryBoundary, commit);
     }
     for (const swap of swaps) {
       if (swap.backupMoved) {
@@ -383,10 +423,34 @@ async function applyTransaction({ target, skillRoot, release, previous, candidat
         : [],
     });
     void commitResult;
-    return { commit, validation };
+    return { commit, validation, rollbackAction };
   } catch (error) {
     if (committed) {
-      throw upgradeError(`${error.message}; the validated upgrade commit was retained for safe manual revert`, error.code ?? "UPGRADE_POST_COMMIT_FAILED");
+      const recoveryRollbackErrors = [];
+      if (recoveryApplied) {
+        try {
+          await atomicWriteFile(path.join(target, ".autopilot", "state.json"), recoveryBoundary.stateBytes);
+          await atomicWriteFile(path.join(target, ".project", "plan", "queue.json"), recoveryBoundary.queueBytes);
+          const candidateFile = path.join(target, ".autopilot", "runtime", "candidate.json");
+          if (recoveryBoundary.candidateBytes) {
+            await atomicWriteFile(candidateFile, recoveryBoundary.candidateBytes);
+          } else {
+            await rm(candidateFile, { force: true });
+          }
+        } catch (rollbackError) {
+          recoveryRollbackErrors.push(rollbackError.message);
+        }
+      }
+      throw upgradeError(
+        `${error.message}; the validated upgrade commit was retained for safe manual revert${
+          recoveryRollbackErrors.length > 0
+            ? `, but runtime recovery rollback also failed: ${recoveryRollbackErrors.join("; ")}`
+            : " and the pre-upgrade runtime boundary was restored"
+        }`,
+        recoveryRollbackErrors.length > 0
+          ? "UPGRADE_ROLLBACK_FAILED"
+          : error.code ?? "UPGRADE_POST_COMMIT_FAILED",
+      );
     }
     const rollbackErrors = [];
     if (recoveryApplied) {
@@ -395,6 +459,8 @@ async function applyTransaction({ target, skillRoot, release, previous, candidat
         await atomicWriteFile(path.join(target, ".project", "plan", "queue.json"), recoveryBoundary.queueBytes);
         if (recoveryBoundary.candidateBytes) {
           await atomicWriteFile(path.join(target, ".autopilot", "runtime", "candidate.json"), recoveryBoundary.candidateBytes);
+        } else {
+          await rm(path.join(target, ".autopilot", "runtime", "candidate.json"), { force: true });
         }
         recoveryApplied = false;
       } catch (rollbackError) {
@@ -491,16 +557,12 @@ async function validatePreviousManifest(target, manifest) {
   }
 }
 
-async function assertSafeControllerBoundary(target, state, previous) {
-  const lock = path.join(target, ".git", "autopilot-controller.lock");
-  if (await exists(lock)) {
-    try {
-      const value = await readBoundedJson(lock, 16 * 1024);
-      process.kill(value.pid, 0);
-      throw upgradeError(`Controller PID ${value.pid} is still running`, "CONTROLLER_RUNNING");
-    } catch (error) {
-      if (error?.code === "EPERM") throw upgradeError("Controller liveness cannot be verified", "CONTROLLER_RUNNING");
-      if (error?.code === "CONTROLLER_RUNNING") throw error;
+async function assertSafeControllerBoundary(target, state, previous, { leaseOwned = false } = {}) {
+  if (!leaseOwned) {
+    const lock = path.join(target, ".git", "autopilot-controller.lock");
+    const lockInspection = await inspectProcessLock(lock, { expectedRoot: target });
+    if (lockInspection.status === "live") {
+      throw upgradeError(`Controller PID ${lockInspection.record?.pid ?? "unknown"} is still running`, "CONTROLLER_RUNNING");
     }
   }
   if (state.completion) throw upgradeError("A task completion transaction is unfinished", "ACTIVE_TRANSACTION");
@@ -541,10 +603,117 @@ async function assertSafeControllerBoundary(target, state, previous) {
       stateRevision: Number(state.revision ?? 0),
       blockerKind: "insufficient_evidence",
       allowedDirty: [queueRelative],
+      stateBytes: await readManagedFile(path.join(target, ".autopilot", "state.json")),
+      queueBytes: await readManagedFile(path.join(target, ...queueRelative.split("/"))),
+      candidateBytes: await readManagedFile(path.join(target, ".autopilot", "runtime", "candidate.json")),
     };
   }
 
   const task = queue?.tasks?.[taskId];
+  // Older releases retain their already-shipped exact bridges. v1.6.18 is the
+  // final free-form legacy state; new releases use trusted machine fault data.
+  const legacyControllerFaultVersion = previous?.version === "1.6.18";
+  const trustedControllerFault =
+    candidate === null &&
+    Array.isArray(state.last_failure_evidence?.controller_faults) &&
+    state.last_failure_evidence.controller_faults.length > 0 &&
+    state.last_failure_evidence.controller_faults.length <= 8 &&
+    state.last_failure_evidence.controller_faults.every((fault) =>
+      fault && typeof fault === "object" && !Array.isArray(fault) &&
+      Object.keys(fault).every((key) => ["operation", "error_code"].includes(key)) &&
+      typeof fault.operation === "string" && /^[a-z][a-z0-9._-]{0,63}$/.test(fault.operation) &&
+      typeof fault.error_code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(fault.error_code)
+    );
+  const legacyControllerFault =
+    legacyControllerFaultVersion &&
+    candidate?.task_id === taskId && candidate?.attempt === attempt &&
+    candidate?.status === "blocked" &&
+    JSON.stringify(candidate.blocker) === JSON.stringify(state.blocker);
+  const dependencyFault = trustedControllerFault && state.last_failure_evidence.controller_faults
+    .some((fault) => fault.operation === "dependency-lock");
+  const dependencyBoundaryApproved =
+    Array.isArray(task?.allowed_paths) &&
+    isAllowedPath("package.json", task.allowed_paths) &&
+    isAllowedPath("pnpm-lock.yaml", task.allowed_paths);
+  const structuralControllerFault =
+    previous?.version &&
+    state.status === "human_required" && state.phase === "blocked" && state.pid === null &&
+    state.blocker?.kind === "controller_tooling" &&
+    attempt >= 0 && typeof state.baseline_head === "string" && state.baseline_head === head &&
+    queue?.project_status === "blocked" && task?.status === "blocked" &&
+    Array.isArray(task?.allowed_paths) &&
+    (legacyControllerFault || trustedControllerFault) &&
+    (!legacyControllerFault || dependencyBoundaryApproved) &&
+    (!dependencyFault || dependencyBoundaryApproved);
+  if (structuralControllerFault) {
+    for (const artifact of ["review.json", "mode-intent.json"]) {
+      if (await exists(path.join(target, ".autopilot", "runtime", artifact))) {
+        throw upgradeError("The controller-tool recovery contains unexpected accepted-phase evidence", "ACTIVE_TASK");
+      }
+    }
+    if (await exists(path.join(target, ".project", "receipts", `${taskId}.json`))) {
+      throw upgradeError("The controller-tool recovery task already has an accepted receipt", "ACTIVE_TASK");
+    }
+    const dirtyRecords = splitZero((await git(target, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])).stdout);
+    const taskDirtyPaths = [];
+    for (const record of dirtyRecords) {
+      const status = record.slice(0, 2);
+      const file = record.slice(3).replaceAll("\\", "/");
+      if (file === queueRelative && status === " M") continue;
+      if (![" M", "??"].includes(status) || !isAllowedPath(file, task.allowed_paths)) {
+        throw upgradeError("The controller-tool recovery contains changes outside its approved task paths", "ACTIVE_TASK");
+      }
+      await assertSafeDestination(target, path.join(target, ...file.split("/")));
+      taskDirtyPaths.push(file);
+    }
+    if (taskDirtyPaths.length > 512) {
+      throw upgradeError("The controller-tool recovery exceeds its preserved-file limit", "ACTIVE_TASK");
+    }
+    const allowedDirty = [queueRelative, ...taskDirtyPaths];
+    await assertCleanGit(target, { allowedDirty });
+    const headQueueResult = await git(target, ["show", `HEAD:${queueRelative}`]);
+    if (Buffer.byteLength(headQueueResult.stdout, "utf8") > MANIFEST_BYTES) {
+      throw upgradeError("Baseline queue exceeds its recovery cap", "ACTIVE_TASK");
+    }
+    let headQueue;
+    try { headQueue = JSON.parse(headQueueResult.stdout); }
+    catch { throw upgradeError("Baseline queue is not valid JSON", "ACTIVE_TASK"); }
+    const expectedQueue = structuredClone(headQueue);
+    const done = new Set(Object.entries(expectedQueue.tasks ?? {})
+      .filter(([, queuedTask]) => queuedTask?.status === "done")
+      .map(([id]) => id));
+    for (const queuedTask of Object.values(expectedQueue.tasks ?? {})) {
+      if (
+        queuedTask?.status === "pending" &&
+        Array.isArray(queuedTask.depends_on) &&
+        queuedTask.depends_on.every((id) => done.has(id))
+      ) queuedTask.status = "ready";
+    }
+    expectedQueue.revision = queue.revision;
+    expectedQueue.project_status = "blocked";
+    if (expectedQueue.tasks?.[taskId]) expectedQueue.tasks[taskId].status = "blocked";
+    if (JSON.stringify(queue) !== JSON.stringify(expectedQueue)) {
+      throw upgradeError("The controller-tool queue contains changes beyond deterministic readiness and runtime status fields", "ACTIVE_TASK");
+    }
+    return {
+      kind: "controller-tool-structural",
+      taskId,
+      attempt,
+      recoveryAttempt: legacyControllerFault ? Math.max(0, attempt - 1) : attempt,
+      baselineHead: head,
+      currentHead: head,
+      stateRevision: Number(state.revision ?? 0),
+      blockerKind: "controller_tooling",
+      blocker: state.blocker,
+      allowedDirty,
+      stateBytes: await readManagedFile(path.join(target, ".autopilot", "state.json")),
+      queueBytes: await readManagedFile(path.join(target, ".project", "plan", "queue.json")),
+      candidateBytes: candidate === null
+        ? null
+        : await readManagedFile(path.join(target, ".autopilot", "runtime", "candidate.json")),
+      candidateSummary: typeof candidate?.summary === "string" ? candidate.summary.slice(0, 1024) : null,
+    };
+  }
   const literalBoundaryMessage = "Allowed directory entries are not writable as prefixes, and the repository has no pre-existing apps, packages, or tests directories.";
   const literalPathBoundary =
     previous?.version &&
@@ -617,9 +786,13 @@ async function assertSafeControllerBoundary(target, state, previous) {
       taskId,
       attempt,
       baselineHead: head,
+      currentHead: head,
       stateRevision: Number(state.revision ?? 0),
       blockerKind: "path_boundary",
       allowedDirty,
+      stateBytes: await readManagedFile(path.join(target, ".autopilot", "state.json")),
+      queueBytes: await readManagedFile(path.join(target, ".project", "plan", "queue.json")),
+      candidateBytes: await readManagedFile(path.join(target, ".autopilot", "runtime", "candidate.json"), { optional: true }),
     };
   }
 
@@ -1028,11 +1201,13 @@ async function assertSafeControllerBoundary(target, state, previous) {
     taskId,
     attempt,
     baselineHead: head,
+    currentHead: head,
     stateRevision: Number(state.revision ?? 0),
     blockerKind: "repair_exhausted",
     allowedDirty: [queueRelative],
     stateBytes,
     queueBytes,
+    candidateBytes: await readManagedFile(path.join(target, ".autopilot", "runtime", "candidate.json"), { optional: true }),
     baselineQueueBytes: Buffer.from(headQueueResult.stdout, "utf8"),
   };
 }
@@ -1131,6 +1306,7 @@ function isExhaustedRecovery(boundary) {
 
 function isActiveTaskRecovery(boundary) {
   return isExhaustedRecovery(boundary) || [
+    "legacy-insufficient-evidence",
     "literal-directory-path-boundary",
     "exhausted-corepack-shim",
     "v1611-corepack-reset-repair",
@@ -1138,6 +1314,7 @@ function isActiveTaskRecovery(boundary) {
     "v1613-lockfile-telemetry",
     "v1614-controller-runner",
     "v1617-gate-cleanup",
+    "controller-tool-structural",
   ].includes(boundary?.kind);
 }
 
@@ -1151,6 +1328,7 @@ function requiresRecoveryBaselineAdvance(boundary) {
     "v1613-lockfile-telemetry",
     "v1614-controller-runner",
     "v1617-gate-cleanup",
+    "controller-tool-structural",
   ].includes(boundary?.kind);
 }
 
@@ -1219,6 +1397,354 @@ async function applyExhaustedRecovery(target, boundary) {
   }
   await atomicWriteFile(path.join(target, ".project", "plan", "queue.json"), boundary.baselineQueueBytes);
   await atomicWriteFile(stateFile, contents);
+}
+
+async function applyStructuralControllerToolRecovery(target, boundary) {
+  const stateFile = path.join(target, ".autopilot", "state.json");
+  const queueFile = path.join(target, ".project", "plan", "queue.json");
+  const candidateFile = path.join(target, ".autopilot", "runtime", "candidate.json");
+  const [current, queue, candidate] = await Promise.all([
+    readBoundedJson(stateFile, 64 * 1024),
+    readBoundedJson(queueFile, MANIFEST_BYTES),
+    readBoundedJson(candidateFile, 64 * 1024, { optional: true }),
+  ]);
+  if (
+    current.revision !== boundary.stateRevision ||
+    current.status !== "human_required" || current.phase !== "blocked" || current.pid !== null ||
+    current.active_task !== boundary.taskId || current.attempt !== boundary.attempt ||
+    current.baseline_head !== boundary.baselineHead ||
+    JSON.stringify(current.blocker) !== JSON.stringify(boundary.blocker) ||
+    queue?.project_status !== "blocked" || queue?.tasks?.[boundary.taskId]?.status !== "blocked" ||
+    (boundary.candidateBytes !== null && (
+      candidate?.task_id !== boundary.taskId || candidate?.attempt !== boundary.attempt ||
+      candidate?.status !== "blocked" ||
+      JSON.stringify(candidate.blocker) !== JSON.stringify(boundary.blocker)
+    )) ||
+    (boundary.candidateBytes === null && candidate !== null)
+  ) throw upgradeError("Controller-tool recovery state changed during the framework upgrade", "UPGRADE_RACE");
+
+  const recoveryEvidence = current.last_failure_evidence?.controller_faults
+    ? current.last_failure_evidence
+    : {
+      failure: {
+        code: "CONTROLLER_TOOL_RECOVERED",
+        message: boundary.candidateSummary || "A controller-owned tool failure interrupted the preserved task.",
+      },
+    };
+  const next = {
+    ...current,
+    revision: Number(current.revision ?? 0) + 1,
+    run_id: null,
+    status: "human_required",
+    phase: "blocked",
+    pid: null,
+    started_at: null,
+    heartbeat_at: new Date().toISOString(),
+    attempt: boundary.recoveryAttempt,
+    no_progress_count: 0,
+    last_progress_hash: null,
+    last_failure_fingerprint: null,
+    last_failure_evidence: recoveryEvidence,
+    last_session: null,
+    session_ids: [],
+    baseline_head: boundary.currentHead,
+    blocker: boundary.blocker,
+    completion: null,
+    finalization: null,
+  };
+  const contents = `${JSON.stringify(next, null, 2)}\n`;
+  if (Buffer.byteLength(contents, "utf8") > 64 * 1024) {
+    throw upgradeError("Controller-tool recovery state exceeds its bounded capacity", "STATE_CAPACITY_EXHAUSTED");
+  }
+  await atomicWriteFile(stateFile, contents);
+  injectRecoveryFailure("structural-state-written");
+  if (candidate !== null) await rm(candidateFile, { force: true });
+}
+
+async function createRecoveryRollbackArtifact(target, boundary, upgradeCommit) {
+  const stateFile = path.join(target, ".autopilot", "state.json");
+  const queueFile = path.join(target, ".project", "plan", "queue.json");
+  const candidateFile = path.join(target, ".autopilot", "runtime", "candidate.json");
+  const [postState, postQueue, postCandidate] = await Promise.all([
+    readManagedFile(stateFile),
+    readManagedFile(queueFile),
+    readManagedFile(candidateFile, { optional: true }),
+  ]);
+  assertSnapshotBound("pre-upgrade state", boundary.stateBytes, 64 * 1024);
+  assertSnapshotBound("pre-upgrade queue", boundary.queueBytes, MANIFEST_BYTES);
+  if (boundary.candidateBytes !== null) {
+    assertSnapshotBound("pre-upgrade candidate", boundary.candidateBytes, 64 * 1024);
+  }
+  assertSnapshotBound("post-upgrade state", postState, 64 * 1024);
+  assertSnapshotBound("post-upgrade queue", postQueue, MANIFEST_BYTES);
+  if (postCandidate !== null) assertSnapshotBound("post-upgrade candidate", postCandidate, 64 * 1024);
+
+  const nonce = randomBytes(8).toString("hex");
+  const relative = `.autopilot/runtime/${RECOVERY_ROLLBACK_PREFIX}${upgradeCommit.slice(0, 16)}-${nonce}.json`;
+  const artifactFile = path.join(target, ...relative.split("/"));
+  await assertSafeDestination(target, artifactFile, { optional: true });
+  const artifact = {
+    schema_version: 1,
+    kind: "controller-owned-active-recovery",
+    created_at: new Date().toISOString(),
+    upgrade_commit: upgradeCommit,
+    pre_upgrade_head: boundary.currentHead,
+    task_id: boundary.taskId,
+    allowed_dirty: [...new Set(boundary.allowedDirty ?? [])].sort(),
+    pre_upgrade: {
+      state: encodeSnapshot(boundary.stateBytes),
+      queue: encodeSnapshot(boundary.queueBytes),
+      candidate: boundary.candidateBytes === null ? null : encodeSnapshot(boundary.candidateBytes),
+    },
+    post_upgrade: {
+      state_sha256: sha256Bytes(postState),
+      queue_sha256: sha256Bytes(postQueue),
+      candidate_sha256: postCandidate === null ? null : sha256Bytes(postCandidate),
+    },
+  };
+  const contents = `${JSON.stringify(artifact, null, 2)}\n`;
+  if (Buffer.byteLength(contents, "utf8") > RECOVERY_ROLLBACK_BYTES) {
+    throw upgradeError("Recovery rollback artifact exceeds its fixed capacity", "ROLLBACK_ARTIFACT_TOO_LARGE");
+  }
+  await atomicWriteFile(artifactFile, contents);
+  return {
+    kind: "controller-owned-active-recovery",
+    artifact: relative,
+    argv: [
+      process.execPath,
+      fileURLToPath(import.meta.url),
+      "--target", target,
+      "--rollback-recovery", relative,
+      "--json",
+    ],
+  };
+}
+
+async function applyRecoveryRollback(target, selectedArtifact) {
+  const { file: artifactFile, relative: artifactRelative } = resolveRecoveryRollbackArtifact(target, selectedArtifact);
+  await assertSafeDestination(target, artifactFile);
+  const artifact = await readBoundedJson(artifactFile, RECOVERY_ROLLBACK_BYTES);
+  validateRecoveryRollbackArtifact(artifact);
+  const preStateBytes = decodeSnapshot("pre-upgrade state", artifact.pre_upgrade.state, 64 * 1024);
+  const preQueueBytes = decodeSnapshot("pre-upgrade queue", artifact.pre_upgrade.queue, MANIFEST_BYTES);
+  const preCandidateBytes = artifact.pre_upgrade.candidate === null
+    ? null
+    : decodeSnapshot("pre-upgrade candidate", artifact.pre_upgrade.candidate, 64 * 1024);
+  const preState = parseSnapshotJson("pre-upgrade state", preStateBytes);
+  const preQueue = parseSnapshotJson("pre-upgrade queue", preQueueBytes);
+  validateRecoveryRollbackBoundary(artifact, preState, preQueue, preCandidateBytes);
+
+  const head = (await git(target, ["rev-parse", "HEAD"])).stdout.trim();
+  if (head !== artifact.upgrade_commit) {
+    throw upgradeError("Recovery rollback requires the upgrade commit to remain the current HEAD", "ROLLBACK_STALE", {
+      expected_head: artifact.upgrade_commit,
+      actual_head: head,
+    });
+  }
+  const parent = (await git(target, ["rev-parse", `${artifact.upgrade_commit}^`])).stdout.trim();
+  if (parent !== artifact.pre_upgrade_head) {
+    throw upgradeError("Recovery rollback commit ancestry no longer matches its captured boundary", "ROLLBACK_STALE");
+  }
+
+  const stateFile = path.join(target, ".autopilot", "state.json");
+  const queueFile = path.join(target, ".project", "plan", "queue.json");
+  const candidateFile = path.join(target, ".autopilot", "runtime", "candidate.json");
+  await Promise.all([
+    assertSafeDestination(target, stateFile),
+    assertSafeDestination(target, queueFile),
+    assertSafeDestination(target, candidateFile, { optional: true }),
+  ]);
+  const [postStateBytes, postQueueBytes, postCandidateBytes] = await Promise.all([
+    readManagedFile(stateFile),
+    readManagedFile(queueFile),
+    readManagedFile(candidateFile, { optional: true }),
+  ]);
+  if (
+    sha256Bytes(postStateBytes) !== artifact.post_upgrade.state_sha256 ||
+    sha256Bytes(postQueueBytes) !== artifact.post_upgrade.queue_sha256 ||
+    (postCandidateBytes === null ? null : sha256Bytes(postCandidateBytes)) !== artifact.post_upgrade.candidate_sha256
+  ) {
+    throw upgradeError("Controller runtime changed after the upgrade; guarded rollback is no longer safe", "ROLLBACK_STALE");
+  }
+  await assertRecoveryRollbackDirtyBoundary(target, artifact, preQueue);
+
+  await git(target, ["revert", "--no-edit", artifact.upgrade_commit]);
+  const rollbackCommit = (await git(target, ["rev-parse", "HEAD"])).stdout.trim();
+  const restoredState = {
+    ...preState,
+    revision: Math.max(Number(preState.revision ?? 0), Number(parseSnapshotJson("post-upgrade state", postStateBytes).revision ?? 0)) + 1,
+    heartbeat_at: new Date().toISOString(),
+    baseline_head: rollbackCommit,
+  };
+  const restoredStateBytes = Buffer.from(`${JSON.stringify(restoredState, null, 2)}\n`, "utf8");
+  assertSnapshotBound("restored state", restoredStateBytes, 64 * 1024);
+  try {
+    if (preCandidateBytes === null) await rm(candidateFile, { force: true });
+    else await atomicWriteFile(candidateFile, preCandidateBytes);
+    await atomicWriteFile(queueFile, preQueueBytes);
+    await atomicWriteFile(stateFile, restoredStateBytes);
+  } catch (error) {
+    const restorationErrors = [];
+    for (const [file, bytes] of [
+      [candidateFile, postCandidateBytes],
+      [queueFile, postQueueBytes],
+      [stateFile, postStateBytes],
+    ]) {
+      try {
+        if (bytes === null) await rm(file, { force: true });
+        else await atomicWriteFile(file, bytes);
+      } catch (restoreError) {
+        restorationErrors.push(`${path.basename(file)}: ${restoreError.message}`);
+      }
+    }
+    throw upgradeError(
+      `Recovery rollback created ${rollbackCommit} but could not restore its runtime snapshot: ${error.message}${
+        restorationErrors.length > 0 ? `; post-upgrade snapshot restoration also failed: ${restorationErrors.join("; ")}` : ""
+      }. The private rollback artifact was retained at ${artifactRelative}.`,
+      "ROLLBACK_RUNTIME_FAILED",
+      { rollback_commit: rollbackCommit, artifact: artifactRelative },
+    );
+  }
+  await assertCleanGit(target, { allowedDirty: artifact.allowed_dirty });
+  await rm(artifactFile, { force: true });
+  return {
+    ok: true,
+    rolled_back: true,
+    reverted_upgrade_commit: artifact.upgrade_commit,
+    rollback_commit: rollbackCommit,
+    restored_task: artifact.task_id,
+    baseline_head: rollbackCommit,
+    artifact_removed: artifactRelative,
+  };
+}
+
+function resolveRecoveryRollbackArtifact(target, selected) {
+  if (typeof selected !== "string" || selected.length === 0 || selected.length > 512 || selected.includes("\0")) {
+    throw upgradeError("Recovery rollback artifact path is invalid", "ROLLBACK_ARTIFACT_INVALID");
+  }
+  const file = path.isAbsolute(selected) ? path.resolve(selected) : path.resolve(target, selected);
+  const relative = path.relative(target, file).replaceAll(path.sep, "/");
+  if (
+    !new RegExp(`^\\.autopilot/runtime/${RECOVERY_ROLLBACK_PREFIX}[0-9a-f]{16}-[0-9a-f]{16}\\.json$`).test(relative) ||
+    relative.startsWith("../") || path.isAbsolute(relative)
+  ) {
+    throw upgradeError("Recovery rollback artifact must be the exact controller-owned private runtime file", "ROLLBACK_ARTIFACT_INVALID");
+  }
+  return { file, relative };
+}
+
+function validateRecoveryRollbackArtifact(artifact) {
+  const exactKeys = (value, keys) =>
+    value && typeof value === "object" && !Array.isArray(value) &&
+    Object.keys(value).sort().join("\0") === [...keys].sort().join("\0");
+  if (
+    !exactKeys(artifact, [
+      "schema_version", "kind", "created_at", "upgrade_commit", "pre_upgrade_head", "task_id",
+      "allowed_dirty", "pre_upgrade", "post_upgrade",
+    ]) ||
+    artifact.schema_version !== 1 || artifact.kind !== "controller-owned-active-recovery" ||
+    typeof artifact.created_at !== "string" || !Number.isFinite(Date.parse(artifact.created_at)) ||
+    !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(artifact.upgrade_commit) ||
+    !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(artifact.pre_upgrade_head) ||
+    typeof artifact.task_id !== "string" || !/^[A-Za-z0-9._-]{1,64}$/.test(artifact.task_id) ||
+    !Array.isArray(artifact.allowed_dirty) || artifact.allowed_dirty.length > 513 ||
+    artifact.allowed_dirty.some((item) => typeof item !== "string" || item.length === 0 || item.length > 512 || item.includes("\\") || item.includes("\0")) ||
+    !exactKeys(artifact.pre_upgrade, ["state", "queue", "candidate"]) ||
+    !exactKeys(artifact.post_upgrade, ["state_sha256", "queue_sha256", "candidate_sha256"]) ||
+    !/^[0-9a-f]{64}$/.test(artifact.post_upgrade.state_sha256) ||
+    !/^[0-9a-f]{64}$/.test(artifact.post_upgrade.queue_sha256) ||
+    !(artifact.post_upgrade.candidate_sha256 === null || /^[0-9a-f]{64}$/.test(artifact.post_upgrade.candidate_sha256))
+  ) throw upgradeError("Recovery rollback artifact has an invalid contract", "ROLLBACK_ARTIFACT_INVALID");
+}
+
+function validateRecoveryRollbackBoundary(artifact, state, queue, candidateBytes) {
+  const task = queue?.tasks?.[artifact.task_id];
+  const blockedBoundary =
+    state?.status === "human_required" && state?.phase === "blocked" && state?.pid === null &&
+    state?.active_task === artifact.task_id && queue?.project_status === "blocked" && task?.status === "blocked";
+  const maintenanceBoundary =
+    state?.status === "paused" && state?.phase === "maintenance" && state?.pid === null &&
+    state?.active_task === null && state?.attempt === 0 && state?.blocker === null &&
+    queue?.project_status === "ready" && task?.status === "ready";
+  if (
+    (!blockedBoundary && !maintenanceBoundary) || !Array.isArray(task?.allowed_paths) ||
+    (maintenanceBoundary && candidateBytes === null) ||
+    typeof state?.baseline_head !== "string" || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(state.baseline_head)
+  ) throw upgradeError("Recovery rollback snapshot is not a bounded controller recovery boundary", "ROLLBACK_ARTIFACT_INVALID");
+  if (candidateBytes !== null) {
+    const candidate = parseSnapshotJson("pre-upgrade candidate", candidateBytes);
+    if (
+      candidate?.task_id !== artifact.task_id || candidate?.status !== "blocked" ||
+      (blockedBoundary && (
+        candidate?.attempt !== state.attempt || JSON.stringify(candidate.blocker) !== JSON.stringify(state.blocker)
+      ))
+    ) throw upgradeError("Recovery rollback candidate does not match its captured task boundary", "ROLLBACK_ARTIFACT_INVALID");
+  }
+  const queueRelative = ".project/plan/queue.json";
+  if (
+    !artifact.allowed_dirty.includes(queueRelative) ||
+    artifact.allowed_dirty.some((relative) =>
+      relative !== queueRelative && !isAllowedPath(relative, task.allowed_paths)
+    )
+  ) throw upgradeError("Recovery rollback dirty-path scope exceeds the captured task boundary", "ROLLBACK_ARTIFACT_INVALID");
+}
+
+async function assertRecoveryRollbackDirtyBoundary(target, artifact, preQueue) {
+  const task = preQueue.tasks[artifact.task_id];
+  const records = splitZero((await git(target, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])).stdout);
+  for (const record of records) {
+    const status = record.slice(0, 2);
+    const relative = record.slice(3).replaceAll("\\", "/");
+    if (!artifact.allowed_dirty.includes(relative) || ![" M", "??"].includes(status)) {
+      throw upgradeError("Recovery rollback found changes outside its captured dirty-path boundary", "ROLLBACK_STALE");
+    }
+    if (relative !== ".project/plan/queue.json" && !isAllowedPath(relative, task.allowed_paths)) {
+      throw upgradeError("Recovery rollback found a task file outside its approved path scope", "ROLLBACK_STALE");
+    }
+    await assertSafeDestination(target, path.join(target, ...relative.split("/")));
+  }
+}
+
+function encodeSnapshot(bytes) {
+  return { sha256: sha256Bytes(bytes), base64: bytes.toString("base64") };
+}
+
+function decodeSnapshot(label, snapshot, cap) {
+  if (
+    !snapshot || typeof snapshot !== "object" || Array.isArray(snapshot) ||
+    Object.keys(snapshot).sort().join("\0") !== "base64\0sha256" ||
+    typeof snapshot.base64 !== "string" || !/^[A-Za-z0-9+/]*={0,2}$/.test(snapshot.base64) ||
+    snapshot.base64.length % 4 !== 0 || !/^[0-9a-f]{64}$/.test(snapshot.sha256)
+  ) throw upgradeError(`${label} snapshot has an invalid contract`, "ROLLBACK_ARTIFACT_INVALID");
+  const bytes = Buffer.from(snapshot.base64, "base64");
+  if (bytes.toString("base64") !== snapshot.base64 || bytes.length > cap || sha256Bytes(bytes) !== snapshot.sha256) {
+    throw upgradeError(`${label} snapshot failed its bounded integrity check`, "ROLLBACK_ARTIFACT_INVALID");
+  }
+  return bytes;
+}
+
+function parseSnapshotJson(label, bytes) {
+  try { return JSON.parse(bytes.toString("utf8")); }
+  catch { throw upgradeError(`${label} snapshot is not valid JSON`, "ROLLBACK_ARTIFACT_INVALID"); }
+}
+
+function assertSnapshotBound(label, bytes, cap) {
+  if (!Buffer.isBuffer(bytes) || bytes.length > cap) {
+    throw upgradeError(`${label} exceeds its fixed capacity`, "ROLLBACK_ARTIFACT_TOO_LARGE");
+  }
+}
+
+function sha256Bytes(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function injectRecoveryFailure(point) {
+  if (
+    process.env.NODE_ENV === "test" &&
+    process.env.AUTOPILOT_TEST_UPGRADE_RECOVERY_FAILURE === point
+  ) {
+    throw upgradeError(`Injected recovery failure at ${point}`, "UPGRADE_TEST_RECOVERY_FAILURE");
+  }
 }
 
 async function applyCorepackActiveRecovery(target, boundary) {
@@ -1297,7 +1823,7 @@ async function applyCorepackActiveRecovery(target, boundary) {
 async function advanceRecoveryBaseline(target, boundary, commit) {
   const stateFile = path.join(target, ".autopilot", "state.json");
   const state = await readBoundedJson(stateFile, 64 * 1024);
-  const corepackRecovery = ["exhausted-corepack-shim", "v1611-corepack-reset-repair", "v1612-dependency-lock", "v1613-lockfile-telemetry", "v1614-controller-runner", "v1617-gate-cleanup"].includes(boundary.kind);
+  const corepackRecovery = ["exhausted-corepack-shim", "v1611-corepack-reset-repair", "v1612-dependency-lock", "v1613-lockfile-telemetry", "v1614-controller-runner", "v1617-gate-cleanup", "controller-tool-structural"].includes(boundary.kind);
   const expectedRevision = corepackRecovery ? boundary.stateRevision + 1 : boundary.stateRevision;
   const expectedAttempt = corepackRecovery ? boundary.recoveryAttempt : boundary.attempt;
   const expectedBaseline = corepackRecovery ? boundary.currentHead : boundary.baselineHead;
@@ -1309,6 +1835,8 @@ async function advanceRecoveryBaseline(target, boundary, commit) {
         ? "controller_tooling"
         : boundary.kind === "v1617-gate-cleanup"
           ? "environment"
+        : boundary.kind === "controller-tool-structural"
+          ? "controller_tooling"
       : corepackRecovery ? "gate_configuration" : boundary.blockerKind;
   if (
     state.revision !== expectedRevision ||
@@ -1437,6 +1965,40 @@ async function runNode(cwd, script, arguments_) {
   return runExternal([process.execPath, script, ...arguments_], cwd);
 }
 
+async function validateInstalledControllerRuntime(target) {
+  const bin = path.join(target, ".autopilot", "bin");
+  const runners = [
+    path.join(bin, "autopilot.mjs"),
+    path.join(bin, "control-plane.mjs"),
+    path.join(bin, "run-action.mjs"),
+    path.join(bin, "run-gate.mjs"),
+  ];
+  const libraries = [
+    path.join(bin, "lib", "controller.mjs"),
+    path.join(bin, "lib", "dependency-manager.mjs"),
+    path.join(bin, "lib", "gate-runner.mjs"),
+    path.join(bin, "lib", "opencode-isolated.mjs"),
+  ];
+  const commands = [
+    ...runners.map((runner) => [process.execPath, "--check", runner]),
+    [
+      process.execPath,
+      "--input-type=module",
+      "--eval",
+      libraries.map((file) => `await import(${JSON.stringify(pathToFileURL(file).href)})`).join(";"),
+    ],
+  ];
+  for (const argv of commands) {
+    const result = await runExternal(argv, target);
+    if (result.code !== 0 || result.output_truncated || result.timed_out) {
+      throw upgradeError(
+        `Installed controller runtime failed its bounded structural preflight: ${diagnostic(result)}`,
+        "UPGRADE_READINESS_FAILED",
+      );
+    }
+  }
+}
+
 async function git(cwd, arguments_) {
   const environment = await externalExecutionEnv(cwd);
   const executable = await resolveExternalGitExecutable(cwd, environment, { label: "Control Plane upgrade Git executable" });
@@ -1523,24 +2085,37 @@ function upgradeError(message, code, details = null) {
 }
 
 function parseArgs(argv) {
-  const result = { target: null, sourceSkill: null, dryRun: false, adopt: false, interview: false, json: false };
+  const result = {
+    target: null,
+    sourceSkill: null,
+    rollbackRecovery: null,
+    dryRun: false,
+    adopt: false,
+    interview: false,
+    json: false,
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
-    if (["--target", "--source-skill"].includes(value)) {
+    if (["--target", "--source-skill", "--rollback-recovery"].includes(value)) {
       const selected = argv[++index];
       if (!selected || selected.startsWith("--")) throw new Error(`${value} requires a path`);
       if (value === "--target") result.target = selected;
-      else result.sourceSkill = selected;
+      else if (value === "--source-skill") result.sourceSkill = selected;
+      else result.rollbackRecovery = selected;
     } else if (value === "--dry-run") result.dryRun = true;
     else if (value === "--adopt") result.adopt = true;
     else if (value === "--interview") result.interview = true;
     else if (value === "--json") result.json = true;
     else if (value === "--help") {
-      process.stdout.write("Usage: upgrade-project.mjs [--target PATH] [--source-skill PATH] [--dry-run] [--adopt | --interview] [--json]\n");
+      process.stdout.write("Usage: upgrade-project.mjs [--target PATH] [--source-skill PATH] [--dry-run] [--adopt | --interview] [--rollback-recovery ARTIFACT] [--json]\n");
       process.exit(0);
     } else throw new Error(`Unknown argument: ${value}`);
   }
   if (result.adopt && result.interview) throw new Error("--adopt and --interview are mutually exclusive");
+  if (
+    result.rollbackRecovery &&
+    (result.dryRun || result.adopt || result.interview || result.sourceSkill)
+  ) throw new Error("--rollback-recovery cannot be combined with source, preview, adoption, or interview options");
   return result;
 }
 

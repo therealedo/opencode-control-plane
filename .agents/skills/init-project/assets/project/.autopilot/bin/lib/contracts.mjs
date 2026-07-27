@@ -40,6 +40,13 @@ const MAX_CONTEXT_BYTES = 16 * 1024;
 const MAX_PHASE_MODEL_COST = 1_000_000;
 const TASK_TOOL_USAGE_MAX_ENTRIES = 40;
 const TASK_TOOL_USAGE_MAX_BYTES = 24 * 1024;
+const PHASE_CONTROLLER_FAULT_MAX_ENTRIES = 8;
+const MODEL_USAGE_FIELDS = Object.freeze([
+  "input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens", "cache_write_tokens",
+]);
+const PHASE_TOOL_NAMES = new Set([
+  "read", "list", "search", "write", "edit", "mutate", "check", "lockfile", "contract",
+]);
 const CONTEXT_PHASES = Object.freeze(["execute", "repair", "review"]);
 const TASK_CONTEXT_KEYS = Object.freeze(["shared", ...CONTEXT_PHASES]);
 const PROTECTED_PATTERNS = [
@@ -512,6 +519,135 @@ export function validateState(state) {
   return issues;
 }
 
+export function validatePhaseToolUsage(usage, {
+  location = "phase_tool_usage",
+  phase = null,
+  taskId = null,
+  maxReturnedBytes = 64 * 1024,
+} = {}) {
+  const issues = [];
+  if (!object(usage)) {
+    issue(issues, location, "must be a bounded phase-usage object");
+    return issues;
+  }
+  const validCounter = (candidate, maximum) => Number.isSafeInteger(candidate) && candidate >= 0 && candidate <= maximum;
+  rejectUnknownKeys(issues, location, usage, [
+    "schema_version", "phase", "task_id", "tool_calls", "returned_bytes", "by_tool",
+    "controller_faults", "environment_faults", "model_usage", "prior_model_usage",
+  ]);
+  if (
+    usage.schema_version !== 1 ||
+    (phase !== null && usage.phase !== phase) ||
+    (taskId !== null && usage.task_id !== taskId) ||
+    !CONTEXT_PHASES.includes(usage.phase) ||
+    !validCounter(usage.tool_calls, 10000) ||
+    !validCounter(usage.returned_bytes, maxReturnedBytes) ||
+    !object(usage.by_tool) || Object.keys(usage.by_tool).length > PHASE_TOOL_NAMES.size
+  ) {
+    issue(issues, location, "contains invalid phase identity or aggregate counters");
+    return issues;
+  }
+  let calls = 0;
+  let bytes = 0;
+  for (const [toolName, counters] of Object.entries(usage.by_tool)) {
+    if (object(counters)) rejectUnknownKeys(issues, `${location}.by_tool.${toolName}`, counters, ["calls", "returned_bytes"]);
+    if (
+      !PHASE_TOOL_NAMES.has(toolName) || !object(counters) ||
+      !validCounter(counters.calls, usage.tool_calls) ||
+      !validCounter(counters.returned_bytes, usage.returned_bytes)
+    ) {
+      issue(issues, `${location}.by_tool.${toolName}`, "contains an invalid tool or counter");
+      continue;
+    }
+    calls += counters.calls;
+    bytes += counters.returned_bytes;
+  }
+  if (calls !== usage.tool_calls || bytes !== usage.returned_bytes) {
+    issue(issues, location, "aggregate counters must equal the per-tool totals");
+  }
+  if (usage.controller_faults !== undefined) {
+    if (!Array.isArray(usage.controller_faults) || usage.controller_faults.length > PHASE_CONTROLLER_FAULT_MAX_ENTRIES) {
+      issue(issues, `${location}.controller_faults`, `must contain at most ${PHASE_CONTROLLER_FAULT_MAX_ENTRIES} controller faults`);
+    } else {
+      for (const [index, fault] of usage.controller_faults.entries()) {
+        const faultLocation = `${location}.controller_faults.${index}`;
+        if (!object(fault)) {
+          issue(issues, faultLocation, "must be an operation and stable error code");
+          continue;
+        }
+        rejectUnknownKeys(issues, faultLocation, fault, ["operation", "error_code"]);
+        if (typeof fault.operation !== "string" || !/^[a-z][a-z0-9._-]{0,63}$/.test(fault.operation)) {
+          issue(issues, `${faultLocation}.operation`, "must be a bounded operation ID");
+        }
+        if (typeof fault.error_code !== "string" || !/^[A-Z][A-Z0-9_]{0,63}$/.test(fault.error_code)) {
+          issue(issues, `${faultLocation}.error_code`, "must be a stable bounded error code");
+        }
+      }
+    }
+  }
+  if (usage.environment_faults !== undefined) {
+    if (!Array.isArray(usage.environment_faults) || usage.environment_faults.length > PHASE_CONTROLLER_FAULT_MAX_ENTRIES) {
+      issue(issues, `${location}.environment_faults`, `must contain at most ${PHASE_CONTROLLER_FAULT_MAX_ENTRIES} environment faults`);
+    } else {
+      for (const [index, fault] of usage.environment_faults.entries()) {
+        const faultLocation = `${location}.environment_faults.${index}`;
+        if (!object(fault)) {
+          issue(issues, faultLocation, "must be an operation and stable error code");
+          continue;
+        }
+        rejectUnknownKeys(issues, faultLocation, fault, ["operation", "error_code"]);
+        if (typeof fault.operation !== "string" || !/^[a-z][a-z0-9._-]{0,63}$/.test(fault.operation)) {
+          issue(issues, `${faultLocation}.operation`, "must be a bounded operation ID");
+        }
+        if (typeof fault.error_code !== "string" || !/^[A-Z][A-Z0-9_]{0,63}$/.test(fault.error_code)) {
+          issue(issues, `${faultLocation}.error_code`, "must be a stable bounded error code");
+        }
+      }
+    }
+  }
+  if (usage.model_usage !== undefined) {
+    const modelUsageLocation = `${location}.model_usage`;
+    if (!object(usage.model_usage)) {
+      issue(issues, modelUsageLocation, "must be a bounded model-usage object");
+    } else {
+      rejectUnknownKeys(issues, modelUsageLocation, usage.model_usage, [...MODEL_USAGE_FIELDS, "cost"]);
+      for (const field of MODEL_USAGE_FIELDS) {
+        if (!Number.isSafeInteger(usage.model_usage[field]) || usage.model_usage[field] < 0) {
+          issue(issues, `${modelUsageLocation}.${field}`, "must be a non-negative safe integer");
+        }
+      }
+      if (
+        typeof usage.model_usage.cost !== "number" ||
+        !Number.isFinite(usage.model_usage.cost) ||
+        usage.model_usage.cost < 0 ||
+        usage.model_usage.cost > MAX_PHASE_MODEL_COST
+      ) issue(issues, `${modelUsageLocation}.cost`, `must be a finite number between 0 and ${MAX_PHASE_MODEL_COST}`);
+    }
+  }
+  if (usage.prior_model_usage !== undefined) {
+    const priorLocation = `${location}.prior_model_usage`;
+    const prior = usage.prior_model_usage;
+    if (!object(prior)) {
+      issue(issues, priorLocation, "must be a bounded aggregate of pruned dispatch telemetry");
+    } else {
+      rejectUnknownKeys(issues, priorLocation, prior, ["dispatches", "complete", ...MODEL_USAGE_FIELDS, "cost"]);
+      if (!Number.isSafeInteger(prior.dispatches) || prior.dispatches < 1) {
+        issue(issues, `${priorLocation}.dispatches`, "must be a positive safe integer");
+      }
+      if (typeof prior.complete !== "boolean") issue(issues, `${priorLocation}.complete`, "must be boolean");
+      for (const field of MODEL_USAGE_FIELDS) {
+        if (!Number.isSafeInteger(prior[field]) || prior[field] < 0) {
+          issue(issues, `${priorLocation}.${field}`, "must be a non-negative safe integer");
+        }
+      }
+      if (typeof prior.cost !== "number" || !Number.isFinite(prior.cost) || prior.cost < 0) {
+        issue(issues, `${priorLocation}.cost`, "must be a finite non-negative number");
+      }
+    }
+  }
+  return issues;
+}
+
 export function validateTaskToolUsage(value, {
   location = "task_tool_usage",
   taskId = null,
@@ -526,75 +662,18 @@ export function validateTaskToolUsage(value, {
     issue(issues, location, `must contain at most ${TASK_TOOL_USAGE_MAX_ENTRIES} bounded phase-usage entries and ${TASK_TOOL_USAGE_MAX_BYTES} bytes`);
     return issues;
   }
-  const allowedTools = new Set(["read", "list", "search", "write", "edit", "mutate", "check", "lockfile", "contract"]);
-  const validCounter = (candidate, maximum) => Number.isSafeInteger(candidate) && candidate >= 0 && candidate <= maximum;
-  const modelTokenFields = [
-    "input_tokens",
-    "output_tokens",
-    "reasoning_tokens",
-    "cache_read_tokens",
-    "cache_write_tokens",
-  ];
   for (const [key, usage] of entries) {
-    const match = /^(execute|repair|review):a([1-9]|1[0-9]|20)$/.exec(key);
+    const match = /^(execute|repair|review):a([1-9]|1[0-9]|20)(?::c([1-9][0-9]{0,14}))?$/.exec(key);
     const itemLocation = `${location}.${key}`;
     if (!match) {
-      issue(issues, itemLocation, "key must identify execute, repair, or review attempt 1-20");
+      issue(issues, itemLocation, "key must identify execute, repair, or review attempt 1-20 and may include a durable dispatch cycle");
       continue;
     }
-    if (!object(usage)) {
-      issue(issues, itemLocation, "contains invalid phase identity or aggregate counters");
-      continue;
-    }
-    rejectUnknownKeys(issues, itemLocation, usage, [
-      "schema_version", "phase", "task_id", "tool_calls", "returned_bytes", "by_tool", "model_usage",
-    ]);
-    if (
-      usage.schema_version !== 1 || usage.phase !== match[1] ||
-      (taskId !== null && usage.task_id !== taskId) ||
-      !validCounter(usage.tool_calls, 10000) || !validCounter(usage.returned_bytes, 64 * 1024) ||
-      !object(usage.by_tool) || Object.keys(usage.by_tool).length > 9
-    ) {
-      issue(issues, itemLocation, "contains invalid phase identity or aggregate counters");
-      continue;
-    }
-    let calls = 0;
-    let bytes = 0;
-    for (const [toolName, counters] of Object.entries(usage.by_tool)) {
-      if (object(counters)) rejectUnknownKeys(issues, `${itemLocation}.by_tool.${toolName}`, counters, ["calls", "returned_bytes"]);
-      if (
-        !allowedTools.has(toolName) || !object(counters) ||
-        !validCounter(counters.calls, usage.tool_calls) ||
-        !validCounter(counters.returned_bytes, usage.returned_bytes)
-      ) {
-        issue(issues, `${itemLocation}.by_tool.${toolName}`, "contains an invalid tool or counter");
-        continue;
-      }
-      calls += counters.calls;
-      bytes += counters.returned_bytes;
-    }
-    if (calls !== usage.tool_calls || bytes !== usage.returned_bytes) {
-      issue(issues, itemLocation, "aggregate counters must equal the per-tool totals");
-    }
-    if (usage.model_usage !== undefined) {
-      const modelUsageLocation = `${itemLocation}.model_usage`;
-      if (!object(usage.model_usage)) {
-        issue(issues, modelUsageLocation, "must be a bounded model-usage object");
-      } else {
-        rejectUnknownKeys(issues, modelUsageLocation, usage.model_usage, [...modelTokenFields, "cost"]);
-        for (const field of modelTokenFields) {
-          if (!Number.isSafeInteger(usage.model_usage[field]) || usage.model_usage[field] < 0) {
-            issue(issues, `${modelUsageLocation}.${field}`, "must be a non-negative safe integer");
-          }
-        }
-        if (
-          typeof usage.model_usage.cost !== "number" ||
-          !Number.isFinite(usage.model_usage.cost) ||
-          usage.model_usage.cost < 0 ||
-          usage.model_usage.cost > MAX_PHASE_MODEL_COST
-        ) issue(issues, `${modelUsageLocation}.cost`, `must be a finite number between 0 and ${MAX_PHASE_MODEL_COST}`);
-      }
-    }
+    issues.push(...validatePhaseToolUsage(usage, {
+      location: itemLocation,
+      phase: match[1],
+      taskId,
+    }));
   }
   return issues;
 }
@@ -650,15 +729,47 @@ export function validateModeIntentContract(value, {
 
 export function appendBoundedTaskToolUsage(value, key, usage) {
   const ledger = { ...(object(value) ? value : {}), [key]: usage };
-  if (utf8Bytes(JSON.stringify(ledger)) <= TASK_TOOL_USAGE_MAX_BYTES) return ledger;
+  const safeAdd = (left, right) => {
+    const sum = Number(left ?? 0) + Number(right ?? 0);
+    return Number.isSafeInteger(sum) ? sum : Number.MAX_SAFE_INTEGER;
+  };
+  const mergePrior = (recipient, source) => {
+    const current = object(recipient.prior_model_usage) ? recipient.prior_model_usage : null;
+    const inherited = object(source.prior_model_usage) ? source.prior_model_usage : null;
+    const model = object(source.model_usage) ? source.model_usage : null;
+    const next = {
+      dispatches: safeAdd(current?.dispatches, safeAdd(inherited?.dispatches, 1)),
+      complete: Boolean(current?.complete ?? true) && Boolean(inherited?.complete ?? true) && model !== null,
+      cost: Number(current?.cost ?? 0) + Number(inherited?.cost ?? 0) + Number(model?.cost ?? 0),
+    };
+    for (const field of MODEL_USAGE_FIELDS) {
+      next[field] = safeAdd(current?.[field], safeAdd(inherited?.[field], model?.[field]));
+      if (next[field] === Number.MAX_SAFE_INTEGER) next.complete = false;
+    }
+    if (!Number.isFinite(next.cost)) {
+      next.cost = Number.MAX_SAFE_INTEGER;
+      next.complete = false;
+    }
+    return { ...recipient, prior_model_usage: next };
+  };
 
-  const omissionOrder = [key, ...Object.keys(ledger).filter((candidate) => candidate !== key)];
-  for (const entryKey of omissionOrder) {
-    const entry = ledger[entryKey];
-    if (!object(entry) || entry.model_usage === undefined) continue;
-    const { model_usage: _omitted, ...mandatoryUsage } = entry;
-    ledger[entryKey] = mandatoryUsage;
-    if (utf8Bytes(JSON.stringify(ledger)) <= TASK_TOOL_USAGE_MAX_BYTES) break;
+  while (
+    Object.keys(ledger).length > TASK_TOOL_USAGE_MAX_ENTRIES ||
+    utf8Bytes(JSON.stringify(ledger)) > TASK_TOOL_USAGE_MAX_BYTES
+  ) {
+    const keys = Object.keys(ledger);
+    if (keys.length === 1) {
+      const only = ledger[keys[0]];
+      if (object(only) && only.model_usage !== undefined) {
+        const { model_usage: _omitted, ...withoutModel } = only;
+        ledger[keys[0]] = mergePrior(withoutModel, only);
+      }
+      break;
+    }
+    const sourceKey = keys.find((candidate) => candidate !== key) ?? keys[0];
+    const recipientKey = keys.find((candidate) => candidate !== sourceKey) ?? key;
+    ledger[recipientKey] = mergePrior(ledger[recipientKey], ledger[sourceKey]);
+    delete ledger[sourceKey];
   }
   return ledger;
 }

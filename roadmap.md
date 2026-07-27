@@ -46,9 +46,9 @@ Blueprint and migration history belong to the cold planning path. They must not 
 
 Repository ownership and runtime placement are separate concerns. Durable product contracts and accepted evidence should remain reviewable with the project, while frequently written state, logs, locks, temporary phase contracts, and executable runtime files should move out of synchronized target repositories when this can be done without weakening recovery, portability, or rollback.
 
-## Current baseline: v1.6.18
+## Current baseline: v1.6.19
 
-Version 1.6.18 carries forward the v1.6.17 baseline and provides:
+Version 1.6.19 carries forward the v1.6.18 baseline and provides:
 
 - [x] Modular, evolving blueprints.
 - [x] Deterministic scaffolding and upgrades.
@@ -115,8 +115,36 @@ Version 1.6.18 carries forward the v1.6.17 baseline and provides:
 - [x] The project dashboard sends stopped blocked tasks directly to the guarded updater instead of making their recovery unreachable behind the maintenance guard.
 - [x] Durable phase-usage validation accepts the controller-owned lockfile action, allowing the guarded recovery to retain its real usage audit through post-upgrade validation.
 - [x] Gate cleanup uses bounded native retries for transient Windows file locks, with an exact v1.6.17 recovery that restores the affected M001 attempt budget.
+- [x] Dependency setup is controller-owned, deterministic, and isolated from the worker's semantic attempt budget.
+- [x] Node/pnpm environment incompatibilities stop before a paid worker launch and identify the local runtime that must change.
+- [x] pnpm lockfiles are resolved in a disposable workspace, validated as complete and credential-free, then promoted atomically.
+- [x] Later tasks hydrate exact frozen dependencies from a verified controller cache without asking a model to repair tooling.
+- [x] Windows process trees use guarded termination and quiescence proof so stale descendants cannot poison later gates.
+- [x] Typed controller, environment, task, and runner-protocol failures prevent infrastructure defects from masquerading as product failures.
+- [x] Retried zero-attempt dispatches retain append-only model-usage evidence instead of overwriting earlier provider usage.
+- [x] v1.6.18 controller-tooling blockers upgrade structurally in place with exact rollback evidence and no application rebuild.
+- [x] Managed-source validation rejects synchronized-folder conflict copies before they can enter a release.
 
 The fixed-context measurement and simulated evaluation remain regression guards, not proof of end-to-end token savings or unchanged implementation quality. Controlled live trials across models are the next step before further prompt compression or reduced-review policy.
+
+## Immediate maintenance: v1.6.19 pre-v1.7 controller stabilization (shipped)
+
+**Goal:** make the first implementation task progress reliably by separating controller infrastructure, local environment, and product-code failures before spending another semantic attempt.
+
+Delivered outcomes:
+
+- [x] Classify controller faults, local environment faults, managed-runner protocol violations, and task failures with separate bounded contracts.
+- [x] Refund controller-owned pre-dispatch failures and environment incompatibilities without launching a paid worker or consuming the task's three-attempt budget.
+- [x] Resolve pnpm dependency graphs in a disposable directory, reject incomplete or unsafe lockfiles, and promote only a fully verified result.
+- [x] Verify exact installed package content against the frozen lockfile and persist a controller-owned cache for deterministic later-task hydration.
+- [x] Treat a pinned Node engine mismatch as an actionable environment boundary instead of asking the worker to change the blueprint or repository.
+- [x] Guard Windows descendants with process identity, private stop acknowledgement, bounded termination, and Job Object quiescence checks.
+- [x] Serialize controller ownership with a Git compare-and-swap lease so stale PID reuse cannot create two active controllers.
+- [x] Reject missing or malformed managed-runner envelopes instead of interpreting controller protocol failures as application failures.
+- [x] Preserve every paid dispatch in append-only cycle telemetry and compact older entries into auditable model-usage totals.
+- [x] Recover the structurally recognized v1.6.18 blocked state in place while preserving application files, queue state, and blueprint history.
+- [x] Roll back partial upgrade mutations exactly and provide an executable, hash-checked rollback artifact when an active-task recovery commit is created.
+- [x] Reject conflict-copy filenames from the managed release manifest and validate M001 creation plus M002 frozen hydration in disposable vertical projects.
 
 ## Immediate maintenance: v1.6.18 Windows gate cleanup recovery (shipped)
 

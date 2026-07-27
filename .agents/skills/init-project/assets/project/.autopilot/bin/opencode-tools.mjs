@@ -599,6 +599,47 @@ async function persistUsage() {
   await usageWrite
 }
 
+async function recordBoundedFault(field, operation, errorCode) {
+  const fault = {
+    operation: String(operation).slice(0, 64),
+    error_code: /^[A-Z][A-Z0-9_]{0,63}$/.test(String(errorCode))
+      ? String(errorCode)
+      : "CONTROLLER_TOOL_FAILED",
+  }
+  usage[field] ??= []
+  if (
+    usage[field].length < 8 &&
+    !usage[field].some((item) =>
+      item.operation === fault.operation && item.error_code === fault.error_code
+    )
+  ) usage[field].push(fault)
+  await persistUsage()
+  return fault
+}
+
+async function recordControllerFault(operation, errorCode) {
+  return recordBoundedFault("controller_faults", operation, errorCode)
+}
+
+async function recordEnvironmentFault(operation, errorCode) {
+  return recordBoundedFault("environment_faults", operation, errorCode)
+}
+
+function runnerClassification(value, { operation, success }) {
+  if (
+    value.schema_version !== 1 || value.operation !== operation ||
+    !["success", "task_failure", "environment_failure", "controller_failure"].includes(value.classification) ||
+    (value.error_code !== null && !/^[A-Z][A-Z0-9_]{0,63}$/.test(value.error_code ?? "")) ||
+    (value.classification === "success") !== success
+  ) throw new Error("Controller runner returned an invalid typed envelope")
+  return {
+    schema_version: 1,
+    operation,
+    classification: value.classification,
+    error_code: value.error_code,
+  }
+}
+
 async function beginTool(name) {
   if (name === "check" && (usage.by_tool.check?.calls ?? 0) >= policy.max_feedback_calls) {
     throw new Error(`autopilot_check is limited to ${policy.max_feedback_calls} calls in this phase`)
@@ -1036,7 +1077,9 @@ function conciseFeedbackResult(value, gateId, definitionSha256) {
     typeof value.timed_out !== "boolean" ||
     !Number.isSafeInteger(value.duration_ms) || value.duration_ms < 0
   ) throw new Error("Feedback gate returned an invalid controller result")
+  const envelope = runnerClassification(value, { operation: "gate", success: value.success })
   const result = {
+    ...envelope,
     gate_id: gateId,
     success: value.success,
     code: value.code,
@@ -1061,14 +1104,22 @@ function conciseActionResult(value) {
   if (
     !value || typeof value !== "object" || Array.isArray(value) ||
     value.action !== "dependency-lock" ||
-    typeof value.package_manager !== "string" || !/^pnpm@\d+\.\d+\.\d+$/.test(value.package_manager) ||
+    !(
+      (typeof value.package_manager === "string" && /^pnpm@\d+\.\d+\.\d+$/.test(value.package_manager)) ||
+      (!value.success && value.package_manager === null)
+    ) ||
     typeof value.success !== "boolean" ||
     (value.code !== null && !Number.isInteger(value.code)) ||
     typeof value.timed_out !== "boolean" ||
     !Number.isSafeInteger(value.duration_ms) || value.duration_ms < 0 ||
     !value.diagnostic || typeof value.diagnostic !== "object" || Array.isArray(value.diagnostic)
   ) throw new Error("Dependency action returned an invalid controller result")
+  const envelope = runnerClassification(value, {
+    operation: "dependency-lock",
+    success: value.success,
+  })
   return {
+    ...envelope,
     action: value.action,
     package_manager: value.package_manager,
     success: value.success,
@@ -1084,7 +1135,7 @@ function conciseActionResult(value) {
 }
 
 export const lockfile = defineTool({
-  description: "Resolve one exactly pinned pnpm workspace lockfile without running package scripts or using credentials.",
+  description: "Synchronize the exactly pinned pnpm workspace and lockfile without package scripts, hooks, or credentials.",
   args: {},
   async execute(args) {
     exactKeys(args, [], "lockfile input")
@@ -1105,13 +1156,36 @@ export const lockfile = defineTool({
       maxBuffer: 128 * 1024,
       timeout: 11 * 60 * 1000,
     })
-    if (execution.error) throw new Error("Dependency action failed to start or exceeded its outer time bound")
+    if (execution.error) {
+      const fault = await recordControllerFault("dependency-lock", execution.error?.code === "ETIMEDOUT"
+        ? "DEPENDENCY_RUNNER_TIMEOUT"
+        : "DEPENDENCY_RUNNER_START_FAILED")
+      return await returned("lockfile", JSON.stringify({
+        schema_version: 1, operation: "dependency-lock", classification: "controller_failure",
+        error_code: fault.error_code, action: "dependency-lock", success: false,
+      }))
+    }
     let parsed
-    try { parsed = JSON.parse(execution.stdout) }
-    catch { throw new Error("Dependency action did not return bounded controller JSON") }
-    const result = conciseActionResult(parsed)
-    if ((result.success && execution.status !== 0) || (!result.success && execution.status !== 1)) {
-      throw new Error("Dependency action exit status disagrees with its result")
+    let result
+    try {
+      parsed = JSON.parse(execution.stdout)
+      result = conciseActionResult(parsed)
+    } catch {
+      const fault = await recordControllerFault("dependency-lock", "DEPENDENCY_RUNNER_PROTOCOL_INVALID")
+      return await returned("lockfile", JSON.stringify({
+        schema_version: 1, operation: "dependency-lock", classification: "controller_failure",
+        error_code: fault.error_code, action: "dependency-lock", success: false,
+      }))
+    }
+    const expectedStatus = result.classification === "success" ? 0
+      : result.classification === "task_failure" ? 1 : 2
+    if (execution.status !== expectedStatus) {
+      const fault = await recordControllerFault("dependency-lock", "DEPENDENCY_RUNNER_STATUS_MISMATCH")
+      result = { ...result, success: false, classification: "controller_failure", error_code: fault.error_code }
+    } else if (result.classification === "controller_failure") {
+      await recordControllerFault("dependency-lock", result.error_code ?? "DEPENDENCY_RUNNER_FAILED")
+    } else if (result.classification === "environment_failure") {
+      await recordEnvironmentFault("dependency-lock", result.error_code ?? "DEPENDENCY_ENVIRONMENT_FAILED")
     }
     return await returned("lockfile", JSON.stringify(result))
   },
@@ -1149,32 +1223,34 @@ export const check = defineTool({
       timeout: (gate.timeout_seconds + 30) * 1000,
     })
     if (execution.error) {
+      const fault = await recordControllerFault("gate", execution.error?.code === "ETIMEDOUT"
+        ? "GATE_RUNNER_TIMEOUT"
+        : "GATE_RUNNER_START_FAILED")
       return await returned("check", JSON.stringify({
-        gate_id: gateId, success: false, code: null,
-        timed_out: execution.error?.code === "ETIMEDOUT", duration_ms: 0,
-        diagnostic: {
-          stdout: "",
-          stderr: "Controller feedback runner failed to start or exceeded its outer time bound.",
-          output_truncated: false,
-        },
+        schema_version: 1, operation: "gate", classification: "controller_failure",
+        error_code: fault.error_code, gate_id: gateId, success: false,
       }))
     }
     let parsed
-    try { parsed = JSON.parse(execution.stdout) }
+    let result
+    try {
+      parsed = JSON.parse(execution.stdout)
+      result = conciseFeedbackResult(parsed, gateId, gate.definition_sha256)
+    }
     catch {
+      const fault = await recordControllerFault("gate", "GATE_RUNNER_PROTOCOL_INVALID")
       return await returned("check", JSON.stringify({
-        gate_id: gateId, success: false, code: execution.status,
-        timed_out: false, duration_ms: 0,
-        diagnostic: {
-          stdout: utf8Prefix(execution.stdout ?? "", 2048),
-          stderr: utf8Prefix(execution.stderr || "Feedback gate runner did not return bounded controller JSON.", 2048),
-          output_truncated: false,
-        },
+        schema_version: 1, operation: "gate", classification: "controller_failure",
+        error_code: fault.error_code, gate_id: gateId, success: false,
       }))
     }
-    const result = conciseFeedbackResult(parsed, gateId, gate.definition_sha256)
-    if ((result.success && execution.status !== 0) || (!result.success && execution.status !== 1)) {
-      throw new Error("Feedback gate runner exit status disagrees with its result")
+    const expectedStatus = result.classification === "success" ? 0
+      : result.classification === "task_failure" ? 1 : 2
+    if (execution.status !== expectedStatus) {
+      const fault = await recordControllerFault("gate", "GATE_RUNNER_STATUS_MISMATCH")
+      result = { ...result, success: false, classification: "controller_failure", error_code: fault.error_code }
+    } else if (result.classification === "controller_failure") {
+      await recordControllerFault("gate", result.error_code ?? "GATE_RUNNER_FAILED")
     }
     return await returned("check", JSON.stringify(result))
   },

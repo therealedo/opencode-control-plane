@@ -9,6 +9,7 @@ import {
   AutopilotError,
   exists,
   findProjectRoot,
+  inspectProcessLock,
   nowIso,
   readUtf8,
 } from "./lib/core.mjs";
@@ -22,9 +23,14 @@ import {
   gitHead,
 } from "./lib/git.mjs";
 import {
+  preflightControllerToolRuntime,
   preflightFreshOpenCode,
   preflightOpenCodeCommand,
 } from "./lib/opencode-isolated.mjs";
+import {
+  isPnpmManagedProject,
+  probeDependencyManager,
+} from "./lib/dependency-manager.mjs";
 import {
   assertControlTopology,
   loadContracts,
@@ -56,13 +62,10 @@ async function rootFrom(options) {
 }
 
 async function liveLock(project) {
-  if (!(await exists(project.paths.lock))) return null;
   try {
-    const lock = JSON.parse(await readFile(project.paths.lock, "utf8"));
-    process.kill(lock.pid, 0);
-    return lock;
-  } catch (error) {
-    if (error?.code === "EPERM") return { pid: "unknown" };
+    const inspection = await inspectProcessLock(project.paths.lock, { expectedRoot: project.root });
+    return inspection.status === "live" ? inspection.record : null;
+  } catch {
     return null;
   }
 }
@@ -222,6 +225,8 @@ async function lifecyclePreflight(root) {
     },
     git: { ok: false },
     opencode: { ok: false },
+    controller_tools: { ok: false },
+    dependency: { ok: true, applicable: false },
     provider_environment: [],
     phases: [],
     gates: [],
@@ -276,6 +281,31 @@ async function lifecyclePreflight(root) {
       ok: false,
       command: [...project.config.opencode.command],
       error: preflightError(error),
+    };
+  }
+
+  try {
+    const checked = await preflightControllerToolRuntime(project);
+    report.controller_tools = { ok: true, ...checked };
+  } catch (error) {
+    report.controller_tools = { ok: false, error: preflightError(error) };
+  }
+
+  if (await isPnpmManagedProject(root)) {
+    const checked = await probeDependencyManager(root);
+    report.dependency = {
+      ok: checked.classification === "success",
+      applicable: true,
+      operation: checked.operation,
+      classification: checked.classification,
+      error_code: checked.error_code,
+      package_manager: checked.package_manager,
+      ...(checked.classification === "success" ? {} : {
+        error: {
+          code: checked.error_code ?? "DEPENDENCY_READINESS_FAILED",
+          message: checked.diagnostic?.stderr || "Dependency readiness failed.",
+        },
+      }),
     };
   }
 
@@ -343,6 +373,8 @@ async function lifecyclePreflight(root) {
     report.structure.ok &&
     report.git.ok &&
     report.opencode.ok &&
+    report.controller_tools.ok &&
+    report.dependency.ok &&
     report.phases.every((item) => item.ok) &&
     report.gates.every((item) => item.ok)
   );

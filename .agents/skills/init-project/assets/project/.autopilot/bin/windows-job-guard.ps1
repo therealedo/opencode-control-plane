@@ -8,6 +8,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$GuardStopFile = [Environment]::GetEnvironmentVariable("AUTOPILOT_GUARD_STOP_FILE", "Process")
+$GuardAcknowledgementFile = [Environment]::GetEnvironmentVariable("AUTOPILOT_GUARD_ACK_FILE", "Process")
+$GuardAcknowledgementToken = [Environment]::GetEnvironmentVariable("AUTOPILOT_GUARD_ACK_TOKEN", "Process")
+[Environment]::SetEnvironmentVariable("AUTOPILOT_GUARD_STOP_FILE", $null, "Process")
+[Environment]::SetEnvironmentVariable("AUTOPILOT_GUARD_ACK_FILE", $null, "Process")
+[Environment]::SetEnvironmentVariable("AUTOPILOT_GUARD_ACK_TOKEN", $null, "Process")
+
 function Quote-WindowsArgument([string]$Value) {
   if ($Value.Length -gt 0 -and $Value -notmatch '[\s"]') { return $Value }
   $builder = New-Object System.Text.StringBuilder
@@ -88,13 +95,66 @@ public static class AutopilotJob {
     public IO_COUNTERS IoInfo;
     public UIntPtr ProcessMemoryLimit, JobMemoryLimit, PeakProcessMemoryUsed, PeakJobMemoryUsed;
   }
+  [StructLayout(LayoutKind.Sequential)] public struct BASIC_ACCOUNTING {
+    public long TotalUserTime, TotalKernelTime, ThisPeriodTotalUserTime, ThisPeriodTotalKernelTime;
+    public uint TotalPageFaultCount, TotalProcesses, ActiveProcesses, TotalTerminatedProcesses;
+  }
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr CreateJobObject(IntPtr attributes, string name);
   [DllImport("kernel32.dll")] public static extern bool SetInformationJobObject(IntPtr job, int infoClass, ref EXTENDED_LIMITS info, uint length);
   [DllImport("kernel32.dll")] public static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
   [DllImport("kernel32.dll")] public static extern bool TerminateJobObject(IntPtr job, uint exitCode);
+  [DllImport("kernel32.dll")] public static extern bool QueryInformationJobObject(IntPtr job, int infoClass, out BASIC_ACCOUNTING info, uint length, IntPtr returnLength);
   [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr handle);
 }
 '@
+
+$JobQuiescenceTimeoutMilliseconds = 5000
+
+function Wait-JobQuiescence([IntPtr]$Job, [int]$TimeoutMilliseconds) {
+  $watch = [Diagnostics.Stopwatch]::StartNew()
+  do {
+    $accounting = New-Object AutopilotJob+BASIC_ACCOUNTING
+    $size = [Runtime.InteropServices.Marshal]::SizeOf($accounting)
+    if (-not [AutopilotJob]::QueryInformationJobObject(
+      $Job,
+      1,
+      [ref]$accounting,
+      $size,
+      [IntPtr]::Zero
+    )) { throw "QueryInformationJobObject failed" }
+    if ($accounting.ActiveProcesses -eq 0) { return $true }
+    Start-Sleep -Milliseconds 25
+  } while ($watch.ElapsedMilliseconds -lt $TimeoutMilliseconds)
+  return $false
+}
+
+function Stop-JobAndWait([IntPtr]$Job, [uint32]$ExitCode) {
+  if (-not [AutopilotJob]::TerminateJobObject($Job, $ExitCode)) {
+    throw "TerminateJobObject failed"
+  }
+  if (-not (Wait-JobQuiescence $Job $JobQuiescenceTimeoutMilliseconds)) {
+    throw "Windows Job Object did not quiesce within the fixed bound"
+  }
+}
+
+function Write-GuardAcknowledgement {
+  if (
+    -not [string]::IsNullOrEmpty($GuardAcknowledgementFile) -and
+    -not [string]::IsNullOrEmpty($GuardAcknowledgementToken)
+  ) {
+    [IO.File]::WriteAllText(
+      $GuardAcknowledgementFile,
+      $GuardAcknowledgementToken,
+      (New-Object Text.UTF8Encoding($false))
+    )
+  }
+}
+
+function Complete-TrackedJob([IntPtr]$Job, [uint32]$ExitCode) {
+  Stop-JobAndWait $Job $ExitCode
+  $script:JobQuiesced = $true
+  Write-GuardAcknowledgement
+}
 
 $job = [AutopilotJob]::CreateJobObject([IntPtr]::Zero, $null)
 if ($job -eq [IntPtr]::Zero) { throw "CreateJobObject failed" }
@@ -125,6 +185,8 @@ $goPath = Join-Path $temporary "go"
 $self = $MyInvocation.MyCommand.Path
 $powerShell = (Get-Process -Id $PID).Path
 $child = $null
+$JobAssigned = $false
+$JobQuiesced = $false
 try {
   $child = Start-RedirectedProcess $powerShell @(
     "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
@@ -134,20 +196,30 @@ try {
     try { $child.Kill() } catch {}
     throw "AssignProcessToJobObject failed; guarded execution is unavailable"
   }
+  $JobAssigned = $true
   $copies = Copy-Streams $child
   [IO.File]::WriteAllText($goPath, "go")
   while (-not $child.WaitForExit(250)) {
     if ($owner.HasExited) {
-      [void][AutopilotJob]::TerminateJobObject($job, 124)
+      Complete-TrackedJob $job 124
+      exit 124
+    }
+    if (-not [string]::IsNullOrEmpty($GuardStopFile) -and (Test-Path -LiteralPath $GuardStopFile)) {
+      Complete-TrackedJob $job 124
       exit 124
     }
   }
   $code = $child.ExitCode
-  [void][AutopilotJob]::TerminateJobObject($job, 0)
+  Complete-TrackedJob $job 0
   [Threading.Tasks.Task]::WaitAll(@($copies[0], $copies[1]), 2000) | Out-Null
   exit $code
 } finally {
   if ($null -ne $owner) { try { $owner.Dispose() } catch {} }
-  if ($job -ne [IntPtr]::Zero) { [void][AutopilotJob]::CloseHandle($job) }
+  if ($job -ne [IntPtr]::Zero) {
+    if ($JobAssigned -and -not $JobQuiesced) {
+      try { Complete-TrackedJob $job 125 } catch {}
+    }
+    [void][AutopilotJob]::CloseHandle($job)
+  }
   try { Remove-Item -LiteralPath $temporary -Recurse -Force } catch {}
 }

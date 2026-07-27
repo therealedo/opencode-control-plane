@@ -10,6 +10,7 @@ import {
   readdir,
   realpath,
   rm,
+  unlink,
 } from "node:fs/promises";
 import {
   AutopilotError,
@@ -29,7 +30,7 @@ import {
   loadProject,
   preflightProjectRoot,
 } from "./project.mjs";
-import { externalExecutionEnv, runArgv, sanitizeProcessResult } from "./process.mjs";
+import { externalExecutionEnv, redactText, runArgv, sanitizeProcessResult } from "./process.mjs";
 import { exactSecretMatches, exactSecretVariants } from "./secrets.mjs";
 
 const GATE_TEMP_TREE_MAX_ENTRIES = 100_000;
@@ -39,6 +40,8 @@ const GATE_TEMP_RUNTIME_MAX_CANDIDATES = 64;
 const GATE_OUTPUT_SECRET_MAX_VALUES = 128;
 const GATE_OUTPUT_SECRET_MAX_BYTES = 64 * 1024;
 const GATE_INJECTED_ENV_MAX_BYTES = 16 * 1024;
+const GATE_CONTROLLER_DIAGNOSTIC_MAX_BYTES = 2048;
+export const GATE_RESULT_SCHEMA_VERSION = 1;
 export const GATE_CLEANUP_OPTIONS = Object.freeze({
   recursive: true,
   force: true,
@@ -138,9 +141,12 @@ async function assertSafeStaleGateTree(root, directory, counter, depth = 0) {
     const entry = path.join(directory, name);
     const info = await lstat(entry);
     if (info.isSymbolicLink()) {
-      throw new AutopilotError("Stale gate runtime contains a link", {
-        code: "GATE_TEMP_UNSAFE",
-      });
+      // The runtime root and every traversed parent are already trusted real
+      // directories. Unlink the directory entry itself without resolving or
+      // following its target, so a stale link cannot permanently block the
+      // bounded cleanup sweep.
+      await unlink(entry);
+      continue;
     }
     if (typeof process.getuid === "function" && process.platform !== "win32" && info.uid !== process.getuid()) {
       throw new AutopilotError("Stale gate runtime contains an entry with a different owner", {
@@ -155,10 +161,14 @@ async function assertSafeStaleGateTree(root, directory, counter, depth = 0) {
         });
       }
       await assertSafeStaleGateTree(root, entry, counter, depth + 1);
-    } else if (!info.isFile() || Number(info.nlink) > 1) {
+    } else if (!info.isFile()) {
       throw new AutopilotError("Stale gate runtime contains an unsafe file type", {
         code: "GATE_TEMP_UNSAFE",
       });
+    } else if (Number(info.nlink) > 1) {
+      // Removing this directory entry only decrements the link count. It does
+      // not follow or modify any other name for the same file.
+      await unlink(entry);
     }
   }
 }
@@ -593,6 +603,37 @@ async function sterileGateEnvironment(project, injected) {
   };
 }
 
+function stableErrorCode(error, fallback) {
+  const code = error?.code;
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)
+    ? code
+    : fallback;
+}
+
+function boundedErrorMessage(error, redactionValues) {
+  return truncateUtf8(
+    redactText(String(error?.message ?? error ?? "Unknown controller failure"), redactionValues),
+    GATE_CONTROLLER_DIAGNOSTIC_MAX_BYTES,
+  );
+}
+
+function classifyPrimaryGateOutcome(result, gate, runError) {
+  if (runError) {
+    return {
+      classification: "controller_failure",
+      error_code: stableErrorCode(runError, "GATE_PROCESS_FAILED"),
+    };
+  }
+  if (result.timed_out) return { classification: "task_failure", error_code: "GATE_TIMEOUT" };
+  if (result.output_truncated) {
+    return { classification: "task_failure", error_code: "GATE_OUTPUT_TRUNCATED" };
+  }
+  if (!gate.success_codes.includes(result.code)) {
+    return { classification: "task_failure", error_code: "GATE_EXIT_CODE" };
+  }
+  return { classification: "success", error_code: null };
+}
+
 export async function runGate(root, gateId, {
   taskId = "project",
   attempt = 0,
@@ -657,7 +698,8 @@ export async function runGate(root, gateId, {
   const startedAt = nowIso();
   const started = Date.now();
   const sterile = await sterileGateEnvironment(project, credentialsForGate.environment);
-  let raw;
+  let raw = null;
+  let runError = null;
   try {
     raw = await runArgv(gate.argv, {
       cwd: project.root,
@@ -666,57 +708,118 @@ export async function runGate(root, gateId, {
       maxOutputBytes: Math.max(gate.max_output_bytes * 2, gate.max_output_bytes),
       guardProcessTree: true,
     });
-  } finally {
-    const credentialErrors = [];
-    let cleanupError = null;
-    try {
-      await assertCredentialInputsUnchanged(project, gateId, credentialsForGate.freeze);
-    } catch (error) {
-      credentialErrors.push(error);
-    }
-    try {
-      await assertConfiguredCredentialSecretInputsUnchanged(project, configuredSecrets.freeze);
-    } catch (error) {
-      credentialErrors.push(error);
-    }
-    try {
-      if (
-        process.env.NODE_ENV === "test" &&
-        process.env.AUTOPILOT_TEST_GATE_CLEANUP_FAILURE === "1"
-      ) throw new Error("Injected gate cleanup failure");
-      await removePrivateGateRuntime(project, sterile.home);
-    } catch (error) {
-      cleanupError = error;
-    }
-    if (cleanupError) {
-      throw new AutopilotError("Failed gate cleanup left a sterile directory that could contain credentials", {
-        code: "GATE_CLEANUP_FAILED",
-        details: {
-          credential_check_failed: credentialErrors.length > 0,
-          cleanup_failed: true,
-        },
-      });
-    }
-    if (credentialErrors.length > 0) throw credentialErrors[0];
+  } catch (error) {
+    runError = error;
   }
-  const sanitized = sanitizeProcessResult(raw, redactionValues, gate.max_output_bytes);
+
+  const credentialErrors = [];
+  let cleanupError = null;
+  try {
+    await assertCredentialInputsUnchanged(project, gateId, credentialsForGate.freeze);
+  } catch (error) {
+    credentialErrors.push(error);
+  }
+  try {
+    await assertConfiguredCredentialSecretInputsUnchanged(project, configuredSecrets.freeze);
+  } catch (error) {
+    credentialErrors.push(error);
+  }
+  try {
+    if (
+      process.env.NODE_ENV === "test" &&
+      process.env.AUTOPILOT_TEST_GATE_CLEANUP_FAILURE === "1"
+    ) throw new Error("Injected gate cleanup failure");
+    await removePrivateGateRuntime(project, sterile.home);
+  } catch (error) {
+    cleanupError = error;
+  }
+
+  const sanitized = raw
+    ? sanitizeProcessResult(raw, redactionValues, gate.max_output_bytes)
+    : {
+        code: null,
+        signal: null,
+        timed_out: false,
+        output_truncated: false,
+        stdout: "",
+        stderr: "",
+      };
+  let secretScanError = null;
   if (exactSecretMatches(`${sanitized.stdout}\n${sanitized.stderr}`, configuredSecrets.secrets).length > 0) {
-    throw new AutopilotError("Exact configured credential remained in sanitized gate output", {
-      code: "SECRET_SCAN_FAILED",
-    });
+    secretScanError = new AutopilotError(
+      "Exact configured credential remained in sanitized gate output",
+      { code: "SECRET_SCAN_FAILED" },
+    );
   }
-  const success =
-    !sanitized.timed_out &&
-    !sanitized.output_truncated &&
-    gate.success_codes.includes(sanitized.code);
+
   const credentialed = gate.credential_profile != null;
+  const primary = classifyPrimaryGateOutcome(sanitized, gate, runError);
+  const controllerFailure = cleanupError
+    ? {
+        error_code: "GATE_CLEANUP_FAILED",
+        message: "Gate temporary runtime cleanup failed after the primary gate outcome was captured.",
+      }
+    : credentialErrors.length > 0
+      ? {
+          error_code: stableErrorCode(credentialErrors[0], "CREDENTIAL_INPUT_CHANGED"),
+          message: boundedErrorMessage(credentialErrors[0], redactionValues),
+        }
+      : secretScanError
+        ? {
+            error_code: "SECRET_SCAN_FAILED",
+            message: boundedErrorMessage(secretScanError, redactionValues),
+          }
+        : runError
+          ? {
+              error_code: stableErrorCode(runError, "GATE_PROCESS_FAILED"),
+              message: boundedErrorMessage(runError, redactionValues),
+            }
+          : null;
+  const classification = controllerFailure ? "controller_failure" : primary.classification;
+  const errorCode = controllerFailure?.error_code ?? primary.error_code;
+  const success = classification === "success";
+  const outputOpaque = credentialed || Boolean(secretScanError);
   // Credentialed output is intentionally opaque. Its content must not affect
   // durable hashes, otherwise transformed secrets become an offline oracle.
-  const outputSha256 = credentialed
+  const outputSha256 = outputOpaque
     ? sha256("credentialed-gate-output-discarded-v1")
     : sha256(`${sanitized.stdout}\n${sanitized.stderr}`);
+  const primaryGateOutcome = {
+    classification: primary.classification,
+    error_code: primary.error_code,
+    code: sanitized.code,
+    signal: sanitized.signal,
+    timed_out: sanitized.timed_out,
+    output_truncated: sanitized.output_truncated,
+    output_sha256: outputSha256,
+  };
+  const cleanup = cleanupError
+    ? {
+        success: false,
+        error_code: stableErrorCode(cleanupError, "GATE_TEMP_CLEANUP_FAILED"),
+        diagnostic: boundedErrorMessage(cleanupError, redactionValues),
+        max_retries: GATE_CLEANUP_OPTIONS.maxRetries,
+        retry_delay_ms: GATE_CLEANUP_OPTIONS.retryDelay,
+        sweep_required: true,
+        credential_residue_possible: credentialsForGate.names.length > 0,
+        fail_closed: credentialsForGate.names.length > 0,
+      }
+    : { success: true };
+  const controllerDiagnostic = controllerFailure
+    ? {
+        error_code: controllerFailure.error_code,
+        message: truncateUtf8(controllerFailure.message, GATE_CONTROLLER_DIAGNOSTIC_MAX_BYTES),
+        cleanup,
+        credential_check_error_codes: credentialErrors.map((error) =>
+          stableErrorCode(error, "CREDENTIAL_INPUT_CHANGED")
+        ),
+      }
+    : null;
   const artifact = {
     schema_version: 1,
+    operation: "gate",
+    classification,
+    error_code: errorCode,
     gate_id: gateId,
     task_id: taskId,
     attempt,
@@ -733,7 +836,10 @@ export async function runGate(root, gateId, {
     success,
     output_truncated: sanitized.output_truncated,
     output_sha256: outputSha256,
-    ...(!credentialed ? {
+    primary_gate_outcome: primaryGateOutcome,
+    cleanup,
+    ...(controllerDiagnostic ? { controller_failure: controllerDiagnostic } : {}),
+    ...(!outputOpaque ? {
       stdout: sanitized.stdout,
       stderr: sanitized.stderr,
     } : {}),
@@ -747,10 +853,31 @@ export async function runGate(root, gateId, {
       code: "CONTROL_DIRECTORY_UNSAFE",
     });
   }
-  const filename = `${startedAt.replace(/[:.]/g, "-")}-${safeName(taskId)}-${safeName(gateId)}-a${attempt}.json`;
+  const gateArtifactName = classification === "controller_failure"
+    ? `controller-${sha256(gateId).slice(0, 12)}`
+    : safeName(gateId);
+  const filename = `${startedAt.replace(/[:.]/g, "-")}-${safeName(taskId)}-${gateArtifactName}-a${attempt}.json`;
   const artifactFile = path.join(project.paths.artifacts, filename);
   await atomicWriteJson(artifactFile, artifact);
-  return {
+  const fingerprint = sha256(stableJson({
+    gateId,
+    classification,
+    errorCode,
+    primary: primaryGateOutcome,
+    cleanup: cleanupError ? {
+      errorCode: cleanup.error_code,
+      credentialResiduePossible: cleanup.credential_residue_possible,
+    } : null,
+    ...(outputOpaque ? { output: "discarded" } : {
+      stdout: sanitized.stdout,
+      stderr: sanitized.stderr,
+    }),
+  }));
+  const response = {
+    schema_version: GATE_RESULT_SCHEMA_VERSION,
+    operation: "gate",
+    classification,
+    error_code: errorCode,
     gate_id: gateId,
     success,
     code: sanitized.code,
@@ -758,24 +885,23 @@ export async function runGate(root, gateId, {
     duration_ms: artifact.duration_ms,
     artifact: normalizeRelative(path.relative(project.root, artifactFile)),
     gate_definition_sha256: definitionSha256,
-    fingerprint: sha256(JSON.stringify({
-      gateId,
-      code: sanitized.code,
-      timedOut: sanitized.timed_out,
-      outputTruncated: sanitized.output_truncated,
-      ...(credentialed ? { output: "discarded" } : {
-        stdout: sanitized.stdout,
-        stderr: sanitized.stderr,
-      }),
-    })),
-    ...(!success && !credentialed ? {
+    fingerprint,
+    primary_gate_outcome: primaryGateOutcome,
+    ...(controllerDiagnostic ? { controller_failure: controllerDiagnostic } : {}),
+    ...(!success ? {
       diagnostic: {
-        stdout: truncateUtf8(sanitized.stdout, 2048),
-        stderr: truncateUtf8(sanitized.stderr, 2048),
+        stdout: outputOpaque ? "" : truncateUtf8(sanitized.stdout, 2048),
+        stderr: truncateUtf8([
+          ...(outputOpaque || !sanitized.stderr ? [] : [sanitized.stderr]),
+          ...(controllerDiagnostic
+            ? [`${controllerDiagnostic.error_code}: ${controllerDiagnostic.message}`]
+            : []),
+        ].join("\n"), 2048),
         output_truncated: sanitized.output_truncated,
       },
     } : {}),
   };
+  return response;
 }
 
 export async function runGates(root, gateIds, options = {}) {

@@ -13,6 +13,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { atomicWriteFile, assertPrivateFile, AutopilotError, isAllowedPath, normalizeRelative, sha256, stableJson, truncateUtf8 } from "./core.mjs";
 import {
   assertCredentialInputsUnchanged,
@@ -41,6 +42,7 @@ import {
   validateRoleToolPolicy,
 } from "./tool-grants.mjs";
 import { exactSecretMatches } from "./secrets.mjs";
+import { assertNoIssues, validatePhaseToolUsage } from "./contracts.mjs";
 
 const PHASE_TOOL_RETURNED_BYTES = 64 * 1024;
 const MAX_FEEDBACK_CALLS = 2;
@@ -56,6 +58,7 @@ const GATE_RUNNER_SNAPSHOT = Object.freeze([
   "lib/commit-policy.mjs",
   "lib/core.mjs",
   "lib/contracts.mjs",
+  "lib/dependency-manager.mjs",
   "lib/gate-runner.mjs",
   "lib/mcp.mjs",
   "lib/process.mjs",
@@ -162,6 +165,24 @@ async function createPrivateOpenCodeRuntime(project, kind) {
   return assertPrivateOpenCodeRuntime(project, directory, kind);
 }
 
+async function removePrivateOpenCodeRuntime(project, directory, kind = null) {
+  await assertPrivateOpenCodeRuntime(project, directory, kind);
+  await rm(directory, {
+    recursive: true,
+    force: true,
+    maxRetries: process.platform === "win32" ? 12 : 3,
+    retryDelay: 150,
+  });
+  try {
+    await lstat(directory);
+    throw new AutopilotError("OpenCode temporary runtime remained after bounded cleanup", {
+      code: "OPENCODE_CLEANUP_FAILED",
+    });
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+}
+
 function staleSecretPath(relative) {
   const normalized = relative.replaceAll("\\", "/");
   const protectedPaths = [
@@ -243,7 +264,7 @@ export async function sweepStaleOpenCodeRuntimes(project) {
     const directory = path.join(parent, entry.name);
     await assertPrivateOpenCodeRuntime(project, directory);
     await assertSafeStaleTree(directory, directory, { count: 0 });
-    await rm(directory, { recursive: true, force: true });
+    await removePrivateOpenCodeRuntime(project, directory);
   }
 }
 
@@ -586,28 +607,15 @@ async function readToolUsage(file, phase, taskId) {
   const loaded = await readPrivateJsonOptional(file, 16 * 1024, "OpenCode phase tool usage");
   if (!loaded) return emptyToolUsage(phase, taskId);
   const value = loaded.value;
-  const validCounter = (candidate, maximum) => Number.isSafeInteger(candidate) && candidate >= 0 && candidate <= maximum;
-  if (
-    value?.schema_version !== 1 || value.phase !== phase || value.task_id !== taskId ||
-    !hasOnlyKeys(value, ["schema_version", "phase", "task_id", "tool_calls", "returned_bytes", "by_tool"]) ||
-    !validCounter(value.tool_calls, 10000) ||
-    !validCounter(value.returned_bytes, PHASE_TOOL_RETURNED_BYTES) ||
-    !plainObject(value.by_tool) || Object.keys(value.by_tool).length > 8
-  ) throw new AutopilotError("OpenCode phase tool usage is invalid", { code: "OPENCODE_TOOL_USAGE_INVALID" });
-  for (const [name, counters] of Object.entries(value.by_tool)) {
-    if (
-      !["read", "list", "search", "write", "edit", "mutate", "check", "lockfile", "contract"].includes(name) ||
-      !plainObject(counters) || !hasOnlyKeys(counters, ["calls", "returned_bytes"]) ||
-      !validCounter(counters.calls, value.tool_calls) ||
-      !validCounter(counters.returned_bytes, value.returned_bytes)
-    ) throw new AutopilotError("OpenCode phase tool usage is invalid", { code: "OPENCODE_TOOL_USAGE_INVALID" });
-  }
-  const totals = Object.values(value.by_tool).reduce(
-    (result, counters) => ({ calls: result.calls + counters.calls, bytes: result.bytes + counters.returned_bytes }),
-    { calls: 0, bytes: 0 },
-  );
-  if (totals.calls !== value.tool_calls || totals.bytes !== value.returned_bytes) {
-    throw new AutopilotError("OpenCode phase tool usage totals are inconsistent", { code: "OPENCODE_TOOL_USAGE_INVALID" });
+  try {
+    assertNoIssues(validatePhaseToolUsage(value, {
+      location: "OpenCode phase tool usage",
+      phase,
+      taskId,
+      maxReturnedBytes: PHASE_TOOL_RETURNED_BYTES,
+    }), "OpenCode phase tool usage");
+  } catch (error) {
+    throw new AutopilotError(error.message, { code: "OPENCODE_TOOL_USAGE_INVALID" });
   }
   return value;
 }
@@ -875,6 +883,57 @@ async function snapshotGateRunner(project, sterile) {
     await assertPrivateFile(sterile, target, `feedback runner snapshot ${relative}`);
   }
   return path.join(targetRoot, "run-gate.mjs");
+}
+
+export async function preflightControllerToolRuntime(project) {
+  const sterile = await createPrivateOpenCodeRuntime(project, "probe");
+  let result;
+  try {
+    const gateRunner = await snapshotGateRunner(project, sterile);
+    const actionRunner = path.join(path.dirname(gateRunner), "run-action.mjs");
+    await Promise.all([
+      assertPrivateFile(sterile, gateRunner, "controller gate runner probe"),
+      assertPrivateFile(sterile, actionRunner, "controller action runner probe"),
+    ]);
+    const libraryRoot = path.join(path.dirname(gateRunner), "lib");
+    const importProbe = [
+      pathToFileURL(path.join(libraryRoot, "gate-runner.mjs")).href,
+      pathToFileURL(path.join(libraryRoot, "dependency-manager.mjs")).href,
+    ].map((url) => `await import(${JSON.stringify(url)})`).join(";");
+    for (const argv of [
+      [process.execPath, "--check", gateRunner],
+      [process.execPath, "--check", actionRunner],
+      [process.execPath, "--input-type=module", "--eval", importProbe],
+    ]) {
+      const probe = await runArgv(argv, {
+        cwd: sterile,
+        timeoutMs: 15_000,
+        maxOutputBytes: 16 * 1024,
+        guardProcessTree: true,
+      });
+      if (probe.code !== 0 || probe.timed_out || probe.output_truncated) {
+        throw new AutopilotError("Controller tool snapshot failed its executable protocol preflight", {
+          code: "CONTROLLER_TOOL_PREFLIGHT_FAILED",
+          details: {
+            code: probe.code,
+            timed_out: probe.timed_out,
+            output_hash: sha256(`${probe.stdout}\n${probe.stderr}`),
+          },
+        });
+      }
+    }
+    result = { schema_version: 1, runner_snapshot: "ready", controller_node: process.execPath };
+  } finally {
+    try {
+      await removePrivateOpenCodeRuntime(project, sterile, "probe");
+    } catch (error) {
+      throw new AutopilotError("Controller tool runtime probe could not clean its private directory", {
+        code: "CONTROLLER_TOOL_CLEANUP_FAILED",
+        details: { cause: String(error?.message ?? error) },
+      });
+    }
+  }
+  return result;
 }
 
 async function loadProviderInputs(settings) {
@@ -1252,7 +1311,7 @@ export async function preflightOpenCodeCommand(project) {
   } finally {
     try {
       await assertPrivateOpenCodeRuntime(project, neutral, "probe");
-      await rm(neutral, { recursive: true, force: true });
+      await removePrivateOpenCodeRuntime(project, neutral, "probe");
     } catch {
       throw new AutopilotError("Failed OpenCode command-probe cleanup", {
         code: "OPENCODE_CLEANUP_FAILED",
@@ -1300,8 +1359,11 @@ async function prepareSterilePhase(project, {
   const launchCwd = path.join(sterile, "launch-cwd");
   const moduleCache = path.join(sterile, "powershell", "ModuleAnalysisCache");
   const removeSterile = async () => {
-    await assertPrivateOpenCodeRuntime(project, sterile, "phase");
-    await rm(sterile, { recursive: true, force: true });
+    await removePrivateOpenCodeRuntime(project, sterile, "phase");
+    if (
+      process.env.NODE_ENV === "test" &&
+      process.env.AUTOPILOT_TEST_FAIL_PHASE_CLEANUP === phase
+    ) throw new Error("Injected post-removal OpenCode phase cleanup failure");
   };
   try {
   await Promise.all([
@@ -1451,6 +1513,7 @@ export async function runFreshOpenCode(project, prompt, {
   baseline,
   priorSessionIds = [],
   captureEphemeralSecrets = null,
+  onProcessStart = null,
 } = {}) {
   const settings = project.config.opencode;
   const preflight = await preflightFreshOpenCode(project, { phase, taskId, baseline });
@@ -1478,6 +1541,7 @@ export async function runFreshOpenCode(project, prompt, {
   let raw;
   let toolUsage = emptyToolUsage(phase, taskId);
   try {
+    try {
     if (typeof captureEphemeralSecrets === "function") {
       captureEphemeralSecrets([...phaseSecrets]);
     }
@@ -1485,9 +1549,10 @@ export async function runFreshOpenCode(project, prompt, {
       cwd: sterile.cwd, env: sterile.environment,
       timeoutMs: Number(settings.timeout_seconds ?? 1800) * 1000,
       maxOutputBytes, allowMultilineArgs: true, guardProcessTree: true,
+      onSpawn: onProcessStart,
     });
     toolUsage = await readToolUsage(sterile.usageFile, phase, taskId);
-  } finally {
+    } finally {
     let credentialError = null;
     try {
       await assertCredentialInputsUnchanged(project, "opencode", preflight.credentials.freeze);
@@ -1506,34 +1571,43 @@ export async function runFreshOpenCode(project, prompt, {
       });
     }
     if (credentialError) throw credentialError;
+    }
+    const result = sanitizeProcessResult(raw, sterile.secrets, maxOutputBytes);
+    if (result.output_truncated) throw new AutopilotError(`Fresh OpenCode ${phase} output exceeded its configured byte cap`, { code: "OPENCODE_OUTPUT_TRUNCATED" });
+    if (result.timed_out || result.code !== 0) {
+      const diagnostic_excerpt = failureDiagnostic(result);
+      const authFailure = result.timed_out ? null : structuredAuthFailure(result.stdout);
+      throw new AutopilotError(authFailure
+        ? `Fresh OpenCode ${phase} session could not authenticate the configured provider: ${authFailure}`
+        : `Fresh OpenCode ${phase} session failed${result.timed_out ? " (timeout)" : ""}; a bounded sanitized diagnostic was retained`, {
+        code: authFailure ? "OPENCODE_AUTH_FAILED" : result.timed_out ? "OPENCODE_TIMEOUT" : "OPENCODE_FAILED",
+        details: {
+          code: result.code,
+          output_hash: sha256(`${result.stdout}\n${result.stderr}`),
+          ...(diagnostic_excerpt ? { diagnostic_excerpt } : {}),
+        },
+      });
+    }
+    const sessionId = parseSessionId(result.stdout);
+    if (observedSessionIds.has(sessionId) || priorSessionIds.includes(sessionId)) throw new AutopilotError(`OpenCode reused a session during ${phase}`, { code: "SESSION_REUSE_DETECTED" });
+    observedSessionIds.add(sessionId);
+    const modelUsage = parseModelUsage(result.stdout, sessionId);
+    const phaseResult = {
+      session_id: sessionId,
+      output_hash: sha256(`${result.stdout}\n${result.stderr}`),
+      tool_usage: { ...toolUsage, ...(modelUsage ? { model_usage: modelUsage } : {}) },
+    };
+    ephemeralPhaseSecrets.set(phaseResult, phaseSecrets);
+    return phaseResult;
+  } catch (error) {
+    if (
+      (Array.isArray(toolUsage?.controller_faults) && toolUsage.controller_faults.length > 0) ||
+      (Array.isArray(toolUsage?.environment_faults) && toolUsage.environment_faults.length > 0)
+    ) {
+      error.controller_tool_usage = toolUsage;
+    }
+    throw error;
   }
-  const result = sanitizeProcessResult(raw, sterile.secrets, maxOutputBytes);
-  if (result.output_truncated) throw new AutopilotError(`Fresh OpenCode ${phase} output exceeded its configured byte cap`, { code: "OPENCODE_OUTPUT_TRUNCATED" });
-  if (result.timed_out || result.code !== 0) {
-    const diagnostic_excerpt = failureDiagnostic(result);
-    const authFailure = result.timed_out ? null : structuredAuthFailure(result.stdout);
-    throw new AutopilotError(authFailure
-      ? `Fresh OpenCode ${phase} session could not authenticate the configured provider: ${authFailure}`
-      : `Fresh OpenCode ${phase} session failed${result.timed_out ? " (timeout)" : ""}; a bounded sanitized diagnostic was retained`, {
-      code: authFailure ? "OPENCODE_AUTH_FAILED" : result.timed_out ? "OPENCODE_TIMEOUT" : "OPENCODE_FAILED",
-      details: {
-        code: result.code,
-        output_hash: sha256(`${result.stdout}\n${result.stderr}`),
-        ...(diagnostic_excerpt ? { diagnostic_excerpt } : {}),
-      },
-    });
-  }
-  const sessionId = parseSessionId(result.stdout);
-  if (observedSessionIds.has(sessionId) || priorSessionIds.includes(sessionId)) throw new AutopilotError(`OpenCode reused a session during ${phase}`, { code: "SESSION_REUSE_DETECTED" });
-  observedSessionIds.add(sessionId);
-  const modelUsage = parseModelUsage(result.stdout, sessionId);
-  const phaseResult = {
-    session_id: sessionId,
-    output_hash: sha256(`${result.stdout}\n${result.stderr}`),
-    tool_usage: { ...toolUsage, ...(modelUsage ? { model_usage: modelUsage } : {}) },
-  };
-  ephemeralPhaseSecrets.set(phaseResult, phaseSecrets);
-  return phaseResult;
 }
 
 function structuredAuthFailure(stdout) {

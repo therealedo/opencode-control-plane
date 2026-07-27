@@ -9,12 +9,12 @@ import {
   validateTaskToolUsage,
 } from "./contracts.mjs";
 import {
-  acquireLock,
   assertPrivateDirectory,
   assertRealInside,
   atomicWriteFile,
   AutopilotError,
   exists,
+  isAllowedPath,
   normalizeRelative,
   nowIso,
   readJson,
@@ -33,6 +33,7 @@ import {
 } from "./gate-runner.mjs";
 import {
   assertCandidateFiles,
+  acquireProjectLease,
   assertCleanStart,
   assertFilesMatchTree,
   assertGitRepository,
@@ -60,6 +61,7 @@ import {
 import {
   assertPhasePromptHasNoSecrets,
   consumeEphemeralPhaseSecrets,
+  preflightControllerToolRuntime,
   preflightFreshOpenCode,
   preflightOpenCodeCommand,
   runFreshOpenCode,
@@ -91,6 +93,10 @@ import {
 import { exactSecretMatches } from "./secrets.mjs";
 import { scanFilesForSecrets, validateProject } from "./validator.mjs";
 import { controllerCommitMessage, taskCommitMessage } from "./commit-policy.mjs";
+import {
+  ensureDependencyState,
+  isPnpmManagedProject,
+} from "./dependency-manager.mjs";
 
 function runId() {
   return `run-${new Date().toISOString().replace(/[-:.TZ]/g, "")}-${process.pid}`;
@@ -147,6 +153,37 @@ function nextReady(queue) {
 function allDone(queue) {
   const entries = taskEntries(queue);
   return entries.length > 0 && entries.every(([, task]) => task.status === "done");
+}
+
+async function assertRootPackageGateScripts(project, gates, gateIds) {
+  const required = [];
+  for (const gateId of gateIds) {
+    const argv = gates.gates?.[gateId]?.argv;
+    if (!Array.isArray(argv)) continue;
+    const runIndex = argv.findIndex((part, index) => part === "run" && argv[index - 1] === "pnpm");
+    if (runIndex >= 0 && typeof argv[runIndex + 1] === "string") {
+      required.push({ gateId, script: argv[runIndex + 1] });
+    }
+  }
+  if (required.length === 0) return;
+  const manifestFile = path.join(project.root, "package.json");
+  let manifest;
+  try {
+    manifest = await readJson(manifestFile, { maxBytes: 256 * 1024 });
+  } catch (error) {
+    throw new AutopilotError(`Root package manifest is required by pnpm gates: ${error.message}`, {
+      code: "GATE_SCRIPT_MISSING",
+    });
+  }
+  const missing = required.filter(({ script }) =>
+    typeof manifest?.scripts?.[script] !== "string" || !manifest.scripts[script].trim()
+  );
+  if (missing.length > 0) {
+    throw new AutopilotError(
+      `Required pnpm gate scripts are missing: ${missing.map(({ gateId, script }) => `${gateId} -> ${script}`).join(", ")}`,
+      { code: "GATE_SCRIPT_MISSING", details: { missing } },
+    );
+  }
 }
 
 function taskEvidenceHash(taskId, task) {
@@ -332,6 +369,18 @@ const POLICY_ERROR_CODES = new Set([
   "UNTRUSTED_PHASE_MUTATION",
 ]);
 
+const CONTROLLER_INFRASTRUCTURE_ERROR_CODES = new Set([
+  "CONTROLLER_TOOL_CLEANUP_FAILED",
+  "GATE_CLEANUP_FAILED",
+  "GATE_TEMP_UNSAFE",
+  "OPENCODE_CLEANUP_FAILED",
+  "OPENCODE_TEMP_UNSAFE",
+  "OPENCODE_TOOL_USAGE_INVALID",
+  "PROCESS_GUARD_STOP_FAILED",
+  "PROCESS_GUARD_UNVERIFIED",
+  "PROCESS_START_FAILED",
+]);
+
 function isPolicyFailure(error) {
   return POLICY_ERROR_CODES.has(error?.code);
 }
@@ -402,6 +451,11 @@ function recoveryDetails(value, maxBytes = 2048) {
   catch { return recoveryText(value, maxBytes); }
 }
 
+function taskUsageLedgerKey(ledger, phase, attempt, cycle) {
+  const base = `${phase}:a${attempt}`;
+  return Object.hasOwn(ledger ?? {}, base) ? `${base}:c${cycle}` : base;
+}
+
 const RECOVERY_SEVERITY = Object.freeze({ critical: 0, high: 1, medium: 2, low: 3 });
 
 function prioritizedRecoveryFindings(findings) {
@@ -423,8 +477,28 @@ function boundedRecoveryEvidence(evidence) {
   const failure = evidence?.failure;
   const gate = evidence?.gate;
   const review = evidence?.review;
+  const controllerFaults = Array.isArray(evidence?.controller_faults)
+    ? evidence.controller_faults.slice(0, 8).map((fault) => ({
+      operation: recoveryText(fault?.operation, 64),
+      error_code: recoveryText(fault?.error_code, 64),
+    }))
+    : [];
+  const environmentFaults = Array.isArray(evidence?.environment_faults)
+    ? evidence.environment_faults.slice(0, 8).map((fault) => ({
+      operation: recoveryText(fault?.operation, 64),
+      error_code: recoveryText(fault?.error_code, 64),
+    }))
+    : [];
   const projected = {
     schema_version: 1,
+    ...(controllerFaults.length > 0 ? {
+      protocol: 1,
+      controller_faults: controllerFaults,
+    } : {}),
+    ...(environmentFaults.length > 0 ? {
+      protocol: 1,
+      environment_faults: environmentFaults,
+    } : {}),
     ...(failure ? {
       failure: {
         code: recoveryText(failure.code ?? "ERROR", 128),
@@ -457,7 +531,9 @@ function boundedRecoveryEvidence(evidence) {
       },
     } : {}),
   };
-  if (!failure && !gate && !review) projected.evidence_excerpt = recoveryDetails(evidence);
+  if (!failure && !gate && !review && controllerFaults.length === 0 && environmentFaults.length === 0) {
+    projected.evidence_excerpt = recoveryDetails(evidence);
+  }
   const serialized = JSON.stringify(projected);
   if (Buffer.byteLength(serialized, "utf8") > 16 * 1024) {
     return {
@@ -750,14 +826,16 @@ export class Controller {
     this.lock = null;
     this.shutdownRequested = false;
     this.openCodeCommandPreflight = null;
+    this.controllerToolPreflight = null;
   }
 
   async initialize() {
     await preflightProjectRoot(this.root);
     this.project = await loadProject(this.root);
     await assertControlTopology(this.project, { createMutable: true });
+    await assertGitRepository(this.root);
     await assertPrivateDirectory(this.root, path.dirname(this.project.paths.lock), "Git lock directory");
-    this.lock = await acquireLock(this.project.paths.lock, {
+    this.lock = await acquireProjectLease(this.root, this.project.paths.lock, {
       pid: process.pid,
       started_at: nowIso(),
       root: this.root,
@@ -765,7 +843,6 @@ export class Controller {
     await sweepStaleGateRuntimes(this.project);
     await sweepStaleOpenCodeRuntimes(this.project);
     this.state = await loadState(this.project);
-    await assertGitRepository(this.root);
     try {
       // Inspect the index before byte-level framework validation so hidden
       // assume-unchanged/skip-worktree flags receive the precise actionable
@@ -1169,6 +1246,43 @@ export class Controller {
     }
     await bestEffortAuxiliary("human blocker artifact", () => writeBlocker(this.project, blocker));
     await bestEffortAuxiliary("checkpoint", () => writeCheckpoint(this.project, this.state, blocker.message));
+  }
+
+  async dependencyEnvironmentRequired(faults, taskId, {
+    refundAttempt = null,
+    toolUsage = null,
+    toolUsageKey = null,
+  } = {}) {
+    const boundedFaults = Array.isArray(faults) && faults.length > 0
+      ? faults.slice(0, 8)
+      : [{ operation: "dependency-lock", error_code: "DEPENDENCY_ENVIRONMENT_FAILED" }];
+    const fault = boundedFaults[0];
+    const evidence = boundedRecoveryEvidence({
+      environment_faults: boundedFaults,
+      protocol: 1,
+    });
+    this.state = await writeState(this.project, this.state, {
+      ...(Number.isInteger(refundAttempt) ? { attempt: Math.max(0, refundAttempt) } : {}),
+      ...(toolUsage && toolUsageKey ? {
+        task_tool_usage: appendBoundedTaskToolUsage(
+          this.state.task_tool_usage,
+          toolUsageKey,
+          toolUsage,
+        ),
+      } : {}),
+      phase: "environment_required",
+      last_failure_fingerprint: sha256(stableJson(evidence)),
+      last_failure_evidence: evidence,
+      blocker: null,
+    });
+    await this.humanRequired({
+      kind: "environment",
+      error_code: fault.error_code,
+      message: `The local dependency runtime is incompatible (${fault.error_code}); no semantic project attempt was charged.`,
+      required_action: "Install or select the Node version required by the committed project, reopen the terminal, run readiness, and resume. Do not weaken the blueprint's runtime requirement.",
+      resume_condition: "The pinned Node and pnpm runtime pass dependency readiness and explicit resume is run.",
+    }, taskId);
+    return false;
   }
 
   async recordFailure(error, progressHash, fingerprint, task, baseline, evidence) {
@@ -1978,7 +2092,7 @@ export class Controller {
         return false;
       }
       const attempt = Number(this.state.attempt ?? 0) + 1;
-      const executionPhase = attempt === 1 || evidence === null ? "execute" : "repair";
+      let executionPhase = attempt === 1 || evidence === null ? "execute" : "repair";
       let packet;
       let packetSecrets = [];
       try {
@@ -1988,15 +2102,111 @@ export class Controller {
         await clearPhaseContracts(this.project);
         await assertHeadAndIndex(this.project, baseline);
         await assertSafeTaskWriteTargets(this.project, task.allowed_paths);
+        await this.ensureSessionCapacity(2);
+        if (!this.openCodeCommandPreflight) {
+          this.openCodeCommandPreflight = await preflightOpenCodeCommand(this.project);
+        }
+        if (!this.controllerToolPreflight) {
+          try {
+            this.controllerToolPreflight = await preflightControllerToolRuntime(this.project);
+          } catch (error) {
+            const errorCode = typeof error?.code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(error.code)
+              ? error.code
+              : "CONTROLLER_TOOL_PREFLIGHT_FAILED";
+            const faultEvidence = boundedRecoveryEvidence({
+              controller_faults: [{ operation: "controller-tool-preflight", error_code: errorCode }],
+              protocol: 1,
+            });
+            this.state = await writeState(this.project, this.state, {
+              phase: "controller_recovery",
+              last_failure_fingerprint: sha256(stableJson(faultEvidence)),
+              last_failure_evidence: faultEvidence,
+              blocker: null,
+            });
+            await this.humanRequired({
+              kind: "controller_tooling",
+              error_code: errorCode,
+              message: `Controller-tool readiness failed (${errorCode}); no semantic project attempt was charged.`,
+              required_action: "Repair or upgrade OpenCode Control Plane, then run readiness. Preserve the current task files.",
+              resume_condition: "Controller-tool readiness passes and explicit resume is run.",
+            }, taskId);
+            return false;
+          }
+        }
+        const dependencyOwner =
+          isAllowedPath("package.json", task.allowed_paths) &&
+          isAllowedPath("pnpm-lock.yaml", task.allowed_paths) &&
+          await exists(path.join(this.root, "package.json"));
+        const dependencyManaged = await isPnpmManagedProject(this.root);
+        if (dependencyOwner || dependencyManaged) {
+          const dependencyMode = dependencyOwner ? "if-needed" : "hydrate";
+          const dependency = await ensureDependencyState(this.root, { mode: dependencyMode });
+          if (dependency.classification === "controller_failure") {
+            const faultEvidence = boundedRecoveryEvidence({
+              controller_faults: [{
+                operation: dependency.operation ?? "dependency-lock",
+                error_code: dependency.error_code ?? "DEPENDENCY_CONTROLLER_FAILURE",
+              }],
+              protocol: 1,
+            });
+            this.state = await writeState(this.project, this.state, {
+              phase: "controller_recovery",
+              last_failure_fingerprint: sha256(stableJson(faultEvidence)),
+              last_failure_evidence: faultEvidence,
+              blocker: null,
+            });
+            await this.humanRequired({
+              kind: "controller_tooling",
+              error_code: dependency.error_code ?? "DEPENDENCY_CONTROLLER_FAILURE",
+              message: `Controller dependency readiness failed (${dependency.error_code ?? "DEPENDENCY_CONTROLLER_FAILURE"}); no semantic project attempt was charged.`,
+              required_action: "Repair or upgrade OpenCode Control Plane, then rerun its readiness check. Preserve the current task files.",
+              resume_condition: "Dependency readiness passes and explicit resume is run.",
+            }, taskId);
+            return false;
+          }
+          if (dependency.classification === "environment_failure") {
+            return this.dependencyEnvironmentRequired([{
+              operation: dependency.operation ?? "dependency-lock",
+              error_code: dependency.error_code ?? "DEPENDENCY_ENVIRONMENT_FAILED",
+            }], taskId);
+          }
+          if (dependency.classification === "task_failure") {
+            if (!dependencyOwner) {
+              const dependencyEvidence = boundedRecoveryEvidence({
+                failure: {
+                  code: dependency.error_code ?? "DEPENDENCY_TASK_FAILURE",
+                  message: dependency.diagnostic?.stderr || "The committed dependency contract cannot be hydrated exactly.",
+                },
+              });
+              this.state = await writeState(this.project, this.state, {
+                phase: "dependency_contract",
+                last_failure_fingerprint: sha256(stableJson(dependencyEvidence)),
+                last_failure_evidence: dependencyEvidence,
+                blocker: null,
+              });
+              await this.humanRequired({
+                kind: "dependency_contract",
+                error_code: dependency.error_code ?? "DEPENDENCY_TASK_FAILURE",
+                message: `The committed dependency contract cannot be hydrated (${dependency.error_code ?? "DEPENDENCY_TASK_FAILURE"}); no semantic project attempt was charged.`,
+                required_action: "Restore the committed pnpm manifest/lock contract or create a scoped dependency-repair blueprint task. Preserve the current task files.",
+                resume_condition: "Frozen dependency hydration passes and explicit resume is run.",
+              }, taskId);
+              return false;
+            }
+            evidence = boundedRecoveryEvidence({
+              failure: {
+                code: dependency.error_code ?? "DEPENDENCY_TASK_FAILURE",
+                message: dependency.diagnostic?.stderr || "The existing dependency declaration needs task-level repair.",
+              },
+            });
+            executionPhase = "repair";
+          }
+        }
         packet = await buildContextPack(this.root, taskId, {
           stage: executionPhase,
           attempt,
           extra: evidence,
         });
-        await this.ensureSessionCapacity(2);
-        if (!this.openCodeCommandPreflight) {
-          this.openCodeCommandPreflight = await preflightOpenCodeCommand(this.project);
-        }
         const executionPreflight = await preflightFreshOpenCode(this.project, {
           phase: executionPhase,
           taskId,
@@ -2030,12 +2240,13 @@ export class Controller {
       // This write is the durable dispatch boundary. A crash or external
       // mutation after it may consume the attempt even if OpenCode never
       // returns, which prevents ambiguous replay after interruption.
+      const dispatchCycle = Number(this.state.cycle ?? 0) + 1;
       this.state = await writeState(this.project, this.state, {
         status: "running",
         phase: executionPhase === "execute" ? "executing" : "repairing",
         attempt,
         baseline_head: baseline,
-        cycle: Number(this.state.cycle ?? 0) + 1,
+        cycle: dispatchCycle,
       });
       if (
         process.env.NODE_ENV === "test" &&
@@ -2048,7 +2259,17 @@ export class Controller {
       let ephemeralSecrets = [];
       let progressHash = this.state.last_progress_hash ?? sha256("no-progress");
       let executeProtected = null;
+      let phaseProcessStarted = false;
+      let activeUsagePhase = executionPhase;
       try {
+        if (
+          process.env.NODE_ENV === "test" &&
+          process.env.AUTOPILOT_TEST_FAIL_BEFORE_PHASE_PROCESS === executionPhase
+        ) {
+          throw new AutopilotError("Injected OpenCode pre-dispatch failure", {
+            code: "OPENCODE_PREDISPATCH_FAILED",
+          });
+        }
         // The protected snapshot must follow the dispatch-state write because
         // state.json itself is protected from phase mutation.
         executeProtected = await protectedSnapshotRecord(this.project);
@@ -2068,6 +2289,7 @@ export class Controller {
               captureEphemeralSecrets: (values) => {
                 ephemeralSecrets = [...new Set([...ephemeralSecrets, ...values])];
               },
+              onProcessStart: () => { phaseProcessStarted = true; },
             });
           } finally {
             if (signalTimer) clearTimeout(signalTimer);
@@ -2092,17 +2314,103 @@ export class Controller {
           session_ids: [...(this.state.session_ids ?? []), session.session_id],
           task_tool_usage: appendBoundedTaskToolUsage(
             this.state.task_tool_usage,
-            `${executionPhase}:a${attempt}`,
+            taskUsageLedgerKey(this.state.task_tool_usage, executionPhase, attempt, dispatchCycle),
             session.tool_usage,
           ),
           phase: "candidate_validation",
         });
+        const controllerFaults = Array.isArray(session.tool_usage?.controller_faults)
+          ? session.tool_usage.controller_faults
+          : [];
+        if (controllerFaults.length > 0) {
+          await clearPhaseContracts(this.project);
+          const fault = controllerFaults[0];
+          const faultEvidence = boundedRecoveryEvidence({
+            controller_faults: controllerFaults,
+            protocol: 1,
+          });
+          const fingerprint = sha256(stableJson(faultEvidence));
+          this.state = await writeState(this.project, this.state, {
+            attempt: Math.max(0, attempt - 1),
+            phase: "controller_recovery",
+            last_failure_fingerprint: fingerprint,
+            last_failure_evidence: faultEvidence,
+            blocker: null,
+          });
+          await this.humanRequired({
+            kind: "controller_tooling",
+            error_code: fault.error_code,
+            message: `A controller-owned ${fault.operation} operation failed (${fault.error_code}); no semantic project attempt was charged.`,
+            required_action: "Repair or upgrade OpenCode Control Plane, then run its readiness check. Do not discard the preserved project files.",
+            resume_condition: "The controller-tool readiness check passes and explicit resume is run.",
+          }, taskId);
+          return false;
+        }
+        const environmentFaults = Array.isArray(session.tool_usage?.environment_faults)
+          ? session.tool_usage.environment_faults
+          : [];
+        if (environmentFaults.length > 0) {
+          await clearPhaseContracts(this.project);
+          return this.dependencyEnvironmentRequired(environmentFaults, taskId, {
+            refundAttempt: attempt - 1,
+          });
+        }
         candidate = await assertCleanPhaseContract(
           this.project,
           "candidate.json",
           await readCandidateDocument(this.project),
           ephemeralSecrets,
         );
+        assertNoIssues(validateCandidate(candidate, taskId, attempt), "Candidate contract");
+        if (
+          candidate.status === "complete" &&
+          isAllowedPath("package.json", task.allowed_paths) &&
+          isAllowedPath("pnpm-lock.yaml", task.allowed_paths) &&
+          await exists(path.join(this.root, "package.json"))
+        ) {
+          const dependency = await ensureDependencyState(this.root, { mode: "if-needed" });
+          if (dependency.classification === "controller_failure") {
+            await clearPhaseContracts(this.project);
+            const faultEvidence = boundedRecoveryEvidence({
+              controller_faults: [{
+                operation: dependency.operation ?? "dependency-lock",
+                error_code: dependency.error_code ?? "DEPENDENCY_CONTROLLER_FAILURE",
+              }],
+              protocol: 1,
+            });
+            this.state = await writeState(this.project, this.state, {
+              attempt: Math.max(0, attempt - 1),
+              phase: "controller_recovery",
+              last_failure_fingerprint: sha256(stableJson(faultEvidence)),
+              last_failure_evidence: faultEvidence,
+              blocker: null,
+            });
+            await this.humanRequired({
+              kind: "controller_tooling",
+              error_code: dependency.error_code ?? "DEPENDENCY_CONTROLLER_FAILURE",
+              message: `Controller dependency synchronization failed (${dependency.error_code ?? "DEPENDENCY_CONTROLLER_FAILURE"}); the project attempt was refunded and its files were preserved.`,
+              required_action: "Repair or upgrade OpenCode Control Plane, then rerun readiness without deleting the preserved task files.",
+              resume_condition: "Dependency readiness passes and explicit resume is run.",
+            }, taskId);
+            return false;
+          }
+          if (dependency.classification === "environment_failure") {
+            await clearPhaseContracts(this.project);
+            return this.dependencyEnvironmentRequired([{
+              operation: dependency.operation ?? "dependency-lock",
+              error_code: dependency.error_code ?? "DEPENDENCY_ENVIRONMENT_FAILED",
+            }], taskId, { refundAttempt: attempt - 1 });
+          }
+          if (dependency.classification === "task_failure") {
+            throw new AutopilotError(
+              dependency.diagnostic?.stderr || "The candidate dependency graph could not be synchronized.",
+              {
+                code: dependency.error_code ?? "DEPENDENCY_TASK_FAILURE",
+                details: dependency.diagnostic ?? null,
+              },
+            );
+          }
+        }
         acceptedModeSnapshot = await modeIntentSnapshot(
           this.project,
           taskId,
@@ -2157,6 +2465,8 @@ export class Controller {
           });
         }
 
+        await assertRootPackageGateScripts(this.project, this.gates, task.gates);
+
         this.state = await writeState(this.project, this.state, {
           phase: "verifying",
           last_progress_hash: progressHash,
@@ -2184,6 +2494,31 @@ export class Controller {
         await this.rolloverAtBoundary();
         if (!gateResult.success) {
           const failed = gateResult.results.at(-1);
+          if (failed?.classification === "controller_failure") {
+            await clearPhaseContracts(this.project);
+            const faultEvidence = boundedRecoveryEvidence({
+              controller_faults: [{
+                operation: "gate",
+                error_code: failed.error_code ?? "GATE_CONTROLLER_FAILURE",
+              }],
+              protocol: 1,
+            });
+            this.state = await writeState(this.project, this.state, {
+              attempt: Math.max(0, attempt - 1),
+              phase: "controller_recovery",
+              last_failure_fingerprint: sha256(stableJson(faultEvidence)),
+              last_failure_evidence: faultEvidence,
+              blocker: null,
+            });
+            await this.humanRequired({
+              kind: "controller_tooling",
+              error_code: failed.error_code ?? "GATE_CONTROLLER_FAILURE",
+              message: `A controller-owned authoritative gate failed (${failed.error_code ?? "GATE_CONTROLLER_FAILURE"}); the project attempt was refunded and its files were preserved.`,
+              required_action: "Repair or upgrade OpenCode Control Plane, then run readiness. Do not alter project gates or discard the preserved task files.",
+              resume_condition: "Controller gate readiness passes and explicit resume is run.",
+            }, taskId);
+            return false;
+          }
           const error = new AutopilotError(`Gate ${failed.gate_id} failed; see ${failed.artifact}`, {
             code: "GATE_FAILED",
             details: failed,
@@ -2219,6 +2554,7 @@ export class Controller {
         await this.ensureSessionCapacity(1);
         const reviewProtected = await protectedSnapshotRecord(this.project);
         const reviewIgnored = await ignoredApplicationSnapshot(this.project);
+        activeUsagePhase = "review";
         const reviewSession = await runWithPostflight(async () => {
           const signalTimer = (
             process.env.NODE_ENV === "test" &&
@@ -2234,6 +2570,7 @@ export class Controller {
               captureEphemeralSecrets: (values) => {
                 ephemeralSecrets = [...new Set([...ephemeralSecrets, ...values])];
               },
+              onProcessStart: () => { phaseProcessStarted = true; },
             });
           } finally {
             if (signalTimer) clearTimeout(signalTimer);
@@ -2260,7 +2597,7 @@ export class Controller {
           session_ids: [...(this.state.session_ids ?? []), reviewSession.session_id],
           task_tool_usage: appendBoundedTaskToolUsage(
             this.state.task_tool_usage,
-            `review:a${attempt}`,
+            taskUsageLedgerKey(this.state.task_tool_usage, "review", attempt, dispatchCycle),
             reviewSession.tool_usage,
           ),
         });
@@ -2368,6 +2705,118 @@ export class Controller {
               { code: "SECRET_SCAN_FAILED" },
             );
           }
+        }
+        const thrownToolUsage = error?.controller_tool_usage ?? null;
+        const higherPriorityFailure =
+          isPolicyFailure(handledError) || CONTROLLER_INFRASTRUCTURE_ERROR_CODES.has(handledError?.code);
+        if (!phaseProcessStarted && !higherPriorityFailure) {
+          await clearPhaseContracts(this.project);
+          const errorCode = typeof handledError?.code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(handledError.code)
+            ? handledError.code
+            : "OPENCODE_PREDISPATCH_FAILED";
+          const faultEvidence = boundedRecoveryEvidence({
+            controller_faults: [{ operation: "opencode-predispatch", error_code: errorCode }],
+            protocol: 1,
+          });
+          this.state = await writeState(this.project, this.state, {
+            attempt: Math.max(0, attempt - 1),
+            phase: "controller_recovery",
+            last_failure_fingerprint: sha256(stableJson(faultEvidence)),
+            last_failure_evidence: faultEvidence,
+            blocker: null,
+          });
+          await this.humanRequired({
+            kind: "controller_tooling",
+            error_code: errorCode,
+            message: `OpenCode preparation failed before a worker process started (${errorCode}); no semantic project attempt was charged.`,
+            required_action: "Repair or upgrade OpenCode Control Plane, then run readiness. Preserve the current task files.",
+            resume_condition: "Controller readiness passes and explicit resume is run.",
+          }, taskId);
+          return false;
+        }
+        if (!phaseProcessStarted && higherPriorityFailure) {
+          this.state = await writeState(this.project, this.state, {
+            attempt: Math.max(0, attempt - 1),
+          });
+        }
+        if (higherPriorityFailure && thrownToolUsage) {
+          const usagePhase = ["execute", "repair", "review"].includes(thrownToolUsage.phase)
+            ? thrownToolUsage.phase
+            : activeUsagePhase;
+          this.state = await writeState(this.project, this.state, {
+            task_tool_usage: appendBoundedTaskToolUsage(
+              this.state.task_tool_usage,
+              taskUsageLedgerKey(this.state.task_tool_usage, usagePhase, attempt, dispatchCycle),
+              thrownToolUsage,
+            ),
+          });
+        }
+        const thrownControllerFaults = Array.isArray(thrownToolUsage?.controller_faults)
+          ? thrownToolUsage.controller_faults
+          : [];
+        if (!higherPriorityFailure && thrownControllerFaults.length > 0) {
+          await clearPhaseContracts(this.project);
+          const fault = thrownControllerFaults[0];
+          const faultEvidence = boundedRecoveryEvidence({
+            controller_faults: thrownControllerFaults,
+            protocol: 1,
+          });
+          this.state = await writeState(this.project, this.state, {
+            attempt: Math.max(0, attempt - 1),
+            phase: "controller_recovery",
+            task_tool_usage: appendBoundedTaskToolUsage(
+              this.state.task_tool_usage,
+              taskUsageLedgerKey(this.state.task_tool_usage, activeUsagePhase, attempt, dispatchCycle),
+              thrownToolUsage,
+            ),
+            last_failure_fingerprint: sha256(stableJson(faultEvidence)),
+            last_failure_evidence: faultEvidence,
+            blocker: null,
+          });
+          await this.humanRequired({
+            kind: "controller_tooling",
+            error_code: fault.error_code,
+            message: `A controller-owned ${fault.operation} operation failed (${fault.error_code}); the failed worker session did not consume a semantic attempt.`,
+            required_action: "Repair or upgrade OpenCode Control Plane, then run readiness. Preserve the current task files.",
+            resume_condition: "Controller readiness passes and explicit resume is run.",
+          }, taskId);
+          return false;
+        }
+        const thrownEnvironmentFaults = Array.isArray(thrownToolUsage?.environment_faults)
+          ? thrownToolUsage.environment_faults
+          : [];
+        if (!higherPriorityFailure && thrownEnvironmentFaults.length > 0) {
+          await clearPhaseContracts(this.project);
+          return this.dependencyEnvironmentRequired(thrownEnvironmentFaults, taskId, {
+            refundAttempt: attempt - 1,
+            toolUsage: thrownToolUsage,
+            toolUsageKey: taskUsageLedgerKey(this.state.task_tool_usage, activeUsagePhase, attempt, dispatchCycle),
+          });
+        }
+        if (CONTROLLER_INFRASTRUCTURE_ERROR_CODES.has(handledError?.code)) {
+          await clearPhaseContracts(this.project);
+          const faultEvidence = boundedRecoveryEvidence({
+            controller_faults: [{
+              operation: String(handledError.code).startsWith("GATE_") ? "gate" : "opencode-runtime",
+              error_code: handledError.code,
+            }],
+            protocol: 1,
+          });
+          this.state = await writeState(this.project, this.state, {
+            attempt: Math.max(0, attempt - 1),
+            phase: "controller_recovery",
+            last_failure_fingerprint: sha256(stableJson(faultEvidence)),
+            last_failure_evidence: faultEvidence,
+            blocker: null,
+          });
+          await this.humanRequired({
+            kind: "controller_tooling",
+            error_code: handledError.code,
+            message: `Controller infrastructure failed (${handledError.code}); the project attempt was refunded and its files were preserved.`,
+            required_action: "Repair or upgrade OpenCode Control Plane, then run readiness. Do not delete the preserved task files or paste credentials into chat.",
+            resume_condition: "Controller readiness passes and explicit resume is run.",
+          }, taskId);
+          return false;
         }
         const policyFailure = isPolicyFailure(handledError);
         if (policyFailure) {
@@ -2666,6 +3115,16 @@ export class Controller {
     }
     if (!finalResult.success) {
       const failed = finalResult.results.at(-1);
+      if (failed?.classification === "controller_failure") {
+        await this.humanRequired({
+          kind: "controller_tooling",
+          error_code: failed.error_code ?? "GATE_CONTROLLER_FAILURE",
+          message: `Final verification infrastructure failed (${failed.error_code ?? "GATE_CONTROLLER_FAILURE"}); completed task evidence was preserved.`,
+          required_action: "Repair or upgrade OpenCode Control Plane, then run readiness and resume final verification.",
+          resume_condition: "Controller gate readiness passes and explicit resume is run.",
+        }, null);
+        return;
+      }
       await this.humanRequired({
         kind: "final_gate_failed",
         message: `Final gate ${failed?.gate_id ?? "unknown"} failed; see ${failed?.artifact ?? "artifact log"}.`,

@@ -33,10 +33,10 @@ permission:
   external_directory: deny
 ---
 
-Implement the supplied packet only. Understand the affected flow/callers, then use the first sufficient option: no change, existing code, language/platform feature, installed dependency, minimal new code. New production dependencies, files, abstractions, or configuration require current acceptance; never trade away correctness, validation, security, data safety, accessibility, readability, or tests.
+Implement the packet within `allowed_paths`; satisfy all criteria. Trace affected flow/callers. Prefer no change, existing code, platform feature, installed dependency, then minimal new code. Add no production dependency, file, abstraction, or configuration unless required. Preserve correctness, validation, security, data safety, accessibility, readability, and tests.
 
-Search/list narrowly, then read only implicated ranges and satisfy every criterion inside `allowed_paths`. Do not alter control/planning files, permissions, gates, or tests to hide failure. Use only `autopilot_*`; destructive path operations require `autopilot_mutate`.
+Search narrowly; read implicated ranges. Add focused tests required by acceptance and policy. Do not alter control/planning files, permissions, gates, or tests to hide failure. Use only `autopilot_*`; destructive path changes require `autopilot_mutate`.
 
-Add focused tests required by acceptance, quality policy, and project convention. When exposed, `autopilot_lockfile` performs one controller-owned, script-free lockfile resolution for an exactly pinned pnpm workspace; use it instead of blocking on missing transitive entries. `autopilot_check` exposes only listed credential-free feedback gates, at most twice; controller gates remain authoritative. Never read, echo, or log secret values. Never commit or perform remote, production, credential, or external-account actions.
+If granted, `autopilot_lockfile` performs one script- and credential-free sync for an exactly pinned pnpm workspace. `autopilot_check` runs listed credential-free gates twice at most; controller gates are authoritative. On `classification: controller_failure`, stop; controller refunds the attempt. Never expose secret values, commit, or act on remote, production, credential, or external accounts.
 
-Submit `autopilot_contract` once with concise model-owned fields. Use `blocked` only for a concrete human/authority boundary; list environment-variable names only. Missing packet/tool means no edits. End immediately after submission.
+Submit `autopilot_contract` once with concise model-owned fields. Use `blocked` only for a human/authority boundary; list environment-variable names only. Missing packet/tool means no edits. End after submission.

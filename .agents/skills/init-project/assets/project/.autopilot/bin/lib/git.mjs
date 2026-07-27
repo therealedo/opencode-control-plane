@@ -1,14 +1,18 @@
 import { appendFile, lstat, readFile, readlink, realpath } from "node:fs/promises";
 import { createReadStream } from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import {
+  acquireLock,
   AutopilotError,
   assertPortableRelative,
   assertRealInside,
+  inspectProcessRecord,
   isAllowedPath,
   matchesGlob,
   normalizeRelative,
+  nowIso,
+  processStartIdentity,
   resolveInside,
   sha256,
   stableJson,
@@ -35,6 +39,8 @@ const HARDENED_GIT_PREFIX = Object.freeze([
   "-c", `core.attributesFile=${NULL_DEVICE}`,
   "-c", `core.excludesFile=${NULL_DEVICE}`,
 ]);
+const CONTROLLER_LEASE_REF = "refs/opencode-control-plane/controller-lock";
+const CONTROLLER_LEASE_BYTES = 16 * 1024;
 
 async function git(root, args, {
   allowFailure = false,
@@ -80,6 +86,156 @@ async function git(root, args, {
     });
   }
   return result;
+}
+
+async function readControllerLease(root) {
+  const reference = await git(
+    root,
+    ["for-each-ref", "--format=%(objectname) %(refname)", "--count=2", CONTROLLER_LEASE_REF],
+    { maxOutputBytes: 2048 },
+  );
+  const entries = reference.stdout.trim().split(/\r?\n/).filter(Boolean);
+  if (entries.length === 0) return null;
+  const match = /^(\S+) (\S+)$/.exec(entries[0]);
+  if (entries.length !== 1 || match?.[2] !== CONTROLLER_LEASE_REF) {
+    throw new AutopilotError("Controller lease ref lookup was ambiguous", {
+      code: "LOCK_INTEGRITY",
+    });
+  }
+  const oid = match[1];
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(oid)) {
+    throw new AutopilotError("Controller lease ref contains an invalid object ID", {
+      code: "LOCK_INTEGRITY",
+    });
+  }
+  const blob = await git(root, ["cat-file", "blob", oid], {
+    maxOutputBytes: CONTROLLER_LEASE_BYTES,
+  });
+  let record;
+  try { record = JSON.parse(blob.stdout); }
+  catch {
+    throw new AutopilotError("Controller lease object is not valid JSON", {
+      code: "LOCK_INTEGRITY",
+    });
+  }
+  const allowed = new Set([
+    "schema_version", "pid", "root", "started_at", "process_start_identity", "owner_token",
+  ]);
+  if (
+    !record || typeof record !== "object" || Array.isArray(record) ||
+    Object.keys(record).some((key) => !allowed.has(key)) ||
+    record.schema_version !== 1 ||
+    typeof record.started_at !== "string" ||
+    typeof record.owner_token !== "string" || !/^[0-9a-f]{48}$/.test(record.owner_token)
+  ) {
+    throw new AutopilotError("Controller lease object has an invalid contract", {
+      code: "LOCK_INTEGRITY",
+    });
+  }
+  return { oid, record };
+}
+
+async function createControllerLeaseBlob(root, payload) {
+  const processStart = await processStartIdentity(payload.pid);
+  const record = {
+    schema_version: 1,
+    pid: payload.pid,
+    root: path.resolve(payload.root ?? root),
+    started_at: payload.started_at ?? nowIso(),
+    ...(processStart ? { process_start_identity: processStart } : {}),
+    owner_token: randomBytes(24).toString("hex"),
+  };
+  const contents = `${JSON.stringify(record)}\n`;
+  if (Buffer.byteLength(contents, "utf8") > CONTROLLER_LEASE_BYTES) {
+    throw new AutopilotError("Controller lease exceeds its fixed bound", {
+      code: "LOCK_INTEGRITY",
+    });
+  }
+  const result = await git(root, ["hash-object", "-w", "--stdin"], {
+    input: contents,
+    maxOutputBytes: 1024,
+  });
+  const oid = result.stdout.trim();
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(oid)) {
+    throw new AutopilotError("Git returned an invalid controller lease object ID", {
+      code: "LOCK_INTEGRITY",
+    });
+  }
+  return { oid, record };
+}
+
+async function releaseControllerLeaseRef(root, oid) {
+  const result = await git(
+    root,
+    ["update-ref", "-d", CONTROLLER_LEASE_REF, oid],
+    { allowFailure: true, maxOutputBytes: 4096 },
+  );
+  if (result.code !== 0) {
+    throw new AutopilotError("Controller lease ownership changed before release", {
+      code: "LOCK_INTEGRITY",
+      details: { diagnostic: truncateUtf8(result.stderr || result.stdout, 2048) },
+    });
+  }
+}
+
+export async function acquireProjectLease(root, file, payload) {
+  const candidate = await createControllerLeaseBlob(root, payload);
+  let acquired = false;
+  for (let pass = 0; pass < 4; pass += 1) {
+    const current = await readControllerLease(root);
+    if (current) {
+      const inspection = await inspectProcessRecord(current.record, { expectedRoot: root });
+      if (inspection.status !== "stale") {
+        throw new AutopilotError("Another controller owns this project", { code: "LOCKED" });
+      }
+    }
+    const expected = current?.oid ?? "0".repeat(candidate.oid.length);
+    const update = await git(
+      root,
+      ["update-ref", "-m", "OpenCode Control Plane controller lease", CONTROLLER_LEASE_REF, candidate.oid, expected],
+      { allowFailure: true, maxOutputBytes: 4096 },
+    );
+    if (update.code === 0) {
+      acquired = true;
+      break;
+    }
+  }
+  if (!acquired) {
+    throw new AutopilotError("Controller lease changed during acquisition", { code: "LOCKED" });
+  }
+
+  let fileLock;
+  try {
+    fileLock = await acquireLock(file, payload);
+  } catch (error) {
+    try { await releaseControllerLeaseRef(root, candidate.oid); }
+    catch (releaseError) {
+      throw new AutopilotError(
+        `${error.message}; controller lease rollback also failed: ${releaseError.message}`,
+        { code: "LOCK_INTEGRITY" },
+      );
+    }
+    throw error;
+  }
+
+  return {
+    file,
+    owner_token: candidate.record.owner_token,
+    async release() {
+      let fileError = null;
+      try { await fileLock.release(); }
+      catch (error) { fileError = error; }
+      let leaseError = null;
+      try { await releaseControllerLeaseRef(root, candidate.oid); }
+      catch (error) { leaseError = error; }
+      if (fileError || leaseError) {
+        throw new AutopilotError(
+          [fileError?.message, leaseError?.message].filter(Boolean).join("; "),
+          { code: "LOCK_INTEGRITY" },
+        );
+      }
+    },
+  };
 }
 
 function nulList(text) {

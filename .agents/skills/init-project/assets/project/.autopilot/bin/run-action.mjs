@@ -1,94 +1,106 @@
 #!/usr/bin/env node
-import { lstat, readFile } from "node:fs/promises";
-import path from "node:path";
-import { AutopilotError, findProjectRoot, truncateUtf8 } from "./lib/core.mjs";
-import { runArgv } from "./lib/process.mjs";
+const OPERATION = "dependency-lock";
+const usage = "Usage: run-action.mjs dependency-lock --root PATH [--probe]";
 
-const usage = "Usage: run-action.mjs dependency-lock --root PATH";
-const args = process.argv.slice(2);
-let action = null;
-let rootArgument = null;
-for (let index = 0; index < args.length; index += 1) {
-  const argument = args[index];
-  if (argument === "--root") {
-    const value = args[index + 1];
-    if (!value || value.startsWith("--")) throw new AutopilotError(usage, { code: "USAGE" });
-    rootArgument = value;
-    index += 1;
-  } else if (!argument.startsWith("--") && action === null) action = argument;
-  else throw new AutopilotError(usage, { code: "USAGE" });
-}
-if (action !== "dependency-lock" || !rootArgument) {
-  throw new AutopilotError(usage, { code: "USAGE" });
-}
-
-const root = await findProjectRoot(path.resolve(rootArgument));
-const packageFile = path.join(root, "package.json");
-const packageInfo = await lstat(packageFile);
-if (!packageInfo.isFile() || packageInfo.isSymbolicLink() || packageInfo.size > 1024 * 1024) {
-  throw new AutopilotError("package.json must be one bounded regular file", { code: "DEPENDENCY_POLICY_INVALID" });
-}
-let manifest;
-try { manifest = JSON.parse(await readFile(packageFile, "utf8")); }
-catch { throw new AutopilotError("package.json is not valid JSON", { code: "DEPENDENCY_POLICY_INVALID" }); }
-if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
-  throw new AutopilotError("package.json must contain one object", { code: "DEPENDENCY_POLICY_INVALID" });
-}
-const manager = /^pnpm@(\d+\.\d+\.\d+)$/.exec(manifest.packageManager ?? "");
-if (!manager) {
-  throw new AutopilotError("packageManager must pin one exact pnpm version", { code: "DEPENDENCY_POLICY_INVALID" });
-}
-
-const npmrcFile = path.join(root, ".npmrc");
-try {
-  const npmrcInfo = await lstat(npmrcFile);
-  if (!npmrcInfo.isFile() || npmrcInfo.isSymbolicLink() || npmrcInfo.size > 16 * 1024) {
-    throw new AutopilotError(".npmrc must be one bounded regular file", { code: "DEPENDENCY_POLICY_INVALID" });
+class CliError extends Error {
+  constructor(message, code = "DEPENDENCY_USAGE_INVALID") {
+    super(message);
+    this.code = code;
   }
-  const safeKeys = new Set([
-    "auto-install-peers", "engine-strict", "package-manager-strict",
-    "package-manager-strict-version", "prefer-frozen-lockfile", "save-exact",
-    "shared-workspace-lockfile", "strict-peer-dependencies",
-  ]);
-  for (const rawLine of (await readFile(npmrcFile, "utf8")).split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#") || line.startsWith(";")) continue;
-    const entry = /^([a-z][a-z0-9-]*)=(true|false)$/i.exec(line);
-    if (!entry || !safeKeys.has(entry[1].toLowerCase())) {
-      throw new AutopilotError(
-        "The dependency action accepts only credential-free boolean project .npmrc settings",
-        { code: "DEPENDENCY_POLICY_INVALID" },
-      );
-    }
-  }
-} catch (error) {
-  if (error?.code !== "ENOENT") throw error;
 }
 
-const started = Date.now();
-const result = await runArgv([
-  "corepack", "pnpm", "install",
-  "--lockfile-only", "--ignore-scripts", "--ignore-pnpmfile",
-  "--frozen-lockfile=false", "--reporter=append-only",
-], {
-  cwd: root,
-  timeoutMs: 10 * 60 * 1000,
-  maxOutputBytes: 64 * 1024,
-  guardProcessTree: true,
-});
-const output = {
-  action: "dependency-lock",
-  package_manager: `pnpm@${manager[1]}`,
-  success: result.code === 0 && !result.timed_out,
-  code: result.code,
-  timed_out: result.timed_out,
-  duration_ms: Date.now() - started,
-  diagnostic: {
-    stdout: truncateUtf8(result.stdout, 4096),
-    stderr: truncateUtf8(result.stderr, 4096),
-    output_truncated: Boolean(result.output_truncated) ||
-      Buffer.byteLength(result.stdout, "utf8") > 4096 || Buffer.byteLength(result.stderr, "utf8") > 4096,
-  },
-};
-process.stdout.write(`${JSON.stringify(output)}\n`);
-if (!output.success) process.exitCode = 1;
+function localFailure(error, {
+  classification = "task_failure",
+  mode = "sync",
+  errorCode = null,
+} = {}) {
+  const message = String(error?.message ?? "Dependency action failed");
+  return {
+    schema_version: 1,
+    operation: OPERATION,
+    classification,
+    error_code: errorCode ?? (/^[A-Z][A-Z0-9_]{0,63}$/.test(error?.code ?? "")
+      ? error.code
+      : "DEPENDENCY_CONTROLLER_FAILURE"),
+    action: OPERATION,
+    package_manager: null,
+    success: false,
+    code: null,
+    timed_out: false,
+    duration_ms: 0,
+    mode,
+    changed: false,
+    skipped: false,
+    lockfile_sha256: null,
+    diagnostic: {
+      stdout: "",
+      stderr: message.slice(0, 2048),
+      output_truncated: message.length > 2048,
+    },
+  };
+}
+
+function parseArguments(args) {
+  let action = null;
+  let root = null;
+  let probe = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === "--root") {
+      const value = args[index + 1];
+      if (root !== null || !value || value.startsWith("--") || /[\0\r\n]/.test(value)) {
+        throw new CliError(usage);
+      }
+      root = value;
+      index += 1;
+    } else if (argument === "--probe") {
+      if (probe) throw new CliError(usage);
+      probe = true;
+    } else if (!argument.startsWith("--") && action === null) action = argument;
+    else throw new CliError(usage);
+  }
+  if (action !== OPERATION || !root) throw new CliError(usage);
+  return { root, probe };
+}
+
+async function loadDependencyManager() {
+  try {
+    return await import("./lib/dependency-manager.mjs");
+  } catch {
+    throw new CliError(
+      "Dependency action implementation could not be loaded",
+      "DEPENDENCY_RUNNER_IMPORT_FAILED",
+    );
+  }
+}
+
+async function main(args = process.argv.slice(2)) {
+  let output;
+  try {
+    const parsed = parseArguments(args);
+    const dependencyManager = await loadDependencyManager();
+    output = parsed.probe
+      ? await dependencyManager.probeDependencyManager(parsed.root)
+      : await dependencyManager.ensureDependencyState(parsed.root, { mode: "if-needed" });
+  } catch (error) {
+    const taskFailure = error?.code === "DEPENDENCY_USAGE_INVALID";
+    output = localFailure(error, {
+      classification: taskFailure ? "task_failure" : "controller_failure",
+      errorCode: taskFailure ? null : error?.code ?? "DEPENDENCY_CONTROLLER_FAILURE",
+    });
+  }
+  let serialized = JSON.stringify(output);
+  if (Buffer.byteLength(serialized, "utf8") > 16 * 1024) {
+    output = localFailure(new Error("Dependency action result exceeded its output bound"), {
+      classification: "controller_failure",
+      errorCode: "DEPENDENCY_OUTPUT_LIMIT",
+    });
+    serialized = JSON.stringify(output);
+  }
+  process.stdout.write(`${serialized}\n`);
+  process.exitCode = output.classification === "success"
+    ? 0
+    : output.classification === "task_failure" ? 1 : 2;
+}
+
+await main();
