@@ -47,7 +47,7 @@ async function main() {
   const home = path.resolve(options.home ?? selectedHome());
   if (options.add) return print(await registerProject(options.add, { home }));
   if (options.forget) return print(await forgetProject(options.forget, { home }));
-  const installation = await readInstallation(home);
+  const installation = await readInstallation(home, options.sourceRoot);
   if (options.checkUpdates) {
     return print(await checkForUpdate({ installedVersion: installation.version, home, force: options.forceCheck }));
   }
@@ -122,7 +122,7 @@ async function interactive(home, initialInstallation) {
     }
     const operation = (async () => {
       try {
-        const installation = await readInstallation(home);
+        const installation = await readInstallation(home, options.sourceRoot);
         const projects = await inspectFleet(home, installation.version);
         if (model.stopped) return;
         model.installation = installation;
@@ -417,6 +417,17 @@ export async function inspectProject(rootValue) {
 
 export async function updateEverything({ home = selectedHome(), installation = null, remote = null } = {}) {
   const current = installation ?? await readInstallation(home);
+  if (current.mode === "project-local") {
+    const checked = remote ?? await checkForUpdate({ installedVersion: current.version, home, force: true });
+    let sourceRoot = current.source_root;
+    if (checked.update_available) sourceRoot = await fastForwardSourceCheckout(sourceRoot, checked);
+    const script = path.join(sourceRoot, ".agents", "skills", "init-project", "bin", "upgrade-all-projects.mjs");
+    await assertPrivateFile(script, 2 * 1024 * 1024);
+    const result = await runCaptured(process.execPath, [script, "--home", home, "--source-root", sourceRoot, "--json"], { cwd: sourceRoot, timeoutMs: UPDATE_TIMEOUT_MS });
+    if (result.code !== 0) throw processError(result);
+    const release = await readBoundedJson(path.join(sourceRoot, ".agents", "skills", "init-project", "assets", "control-plane-release.json"), 128 * 1024);
+    return { ok: true, local_manager: { version: release.version, source_root: sourceRoot }, projects: parseJson(result.stdout, "project updates") };
+  }
   const source = await localSource(current.source_root);
   if (source && compareVersions(source.version, current.version) > 0) {
     return runSourceUpgrade(source.root, home, current.config_home, { local: true, recordSourceRoot: source.root });
@@ -480,7 +491,18 @@ async function localSource(root) {
   }
 }
 
-async function readInstallation(home) {
+async function readInstallation(home, sourceRoot = null) {
+  if (sourceRoot) {
+    const source = await localSource(path.resolve(sourceRoot));
+    if (!source) throw new Error("The selected project-local Control Plane source checkout is invalid");
+    return {
+      version: source.version,
+      source_root: source.root,
+      config_home: null,
+      manifest: null,
+      mode: "project-local",
+    };
+  }
   const manifest = await readBoundedJson(path.join(home, ".agents", ".autopilot-install-manifest.json"), 1024 * 1024, { optional: true });
   const release = await readBoundedJson(path.join(skillRoot, "assets", "control-plane-release.json"), 128 * 1024);
   const version = manifest?.product_id === "opencode-control-plane" && typeof manifest.version === "string" ? manifest.version : release.version;
@@ -490,7 +512,23 @@ async function readInstallation(home) {
     source_root: manifest?.source_root ?? null,
     config_home: manifest?.config_home ?? path.join(home, ".config"),
     manifest: manifest ? path.join(home, ".agents", ".autopilot-install-manifest.json") : null,
+    mode: "legacy-global",
   };
+}
+
+async function fastForwardSourceCheckout(sourceRoot, update) {
+  if (!/^v\d+\.\d+\.\d+$/.test(update.tag ?? "")) throw new Error("The available release tag is invalid");
+  const environment = await externalExecutionEnv(sourceRoot);
+  const git = await resolveExternalGitExecutable(sourceRoot, environment, { label: "Control Plane source Git executable" });
+  const status = await runCaptured(git, ["status", "--porcelain=v1", "--untracked-files=all"], { cwd: sourceRoot, timeoutMs: 60_000, env: gitEnvironment(environment) });
+  if (status.code !== 0 || status.stdout.trim()) throw new Error("The Control Plane source checkout has local changes. Commit or discard them before one-click update.");
+  const fetch = await runCaptured(git, ["fetch", "--force", "origin", `refs/tags/${update.tag}:refs/tags/${update.tag}`], { cwd: sourceRoot, timeoutMs: 10 * 60_000, env: gitEnvironment(environment) });
+  if (fetch.code !== 0) throw processError(fetch, "Could not download the Control Plane release tag");
+  const merge = await runCaptured(git, ["merge", "--ff-only", update.tag], { cwd: sourceRoot, timeoutMs: 10 * 60_000, env: gitEnvironment(environment) });
+  if (merge.code !== 0) throw processError(merge, "The Control Plane source checkout could not fast-forward");
+  const source = await localSource(sourceRoot);
+  if (!source || compareVersions(source.version, update.latest_version) < 0) throw new Error("The updated source checkout does not contain the expected release");
+  return source.root;
 }
 
 async function readBoundedJson(file, maxBytes, { optional = false } = {}) {
@@ -609,6 +647,7 @@ function parseJson(value, label) {
 function parseArgs(argv) {
   const result = {
     home: null,
+    sourceRoot: null,
     snapshot: false,
     json: false,
     add: null,
@@ -620,10 +659,11 @@ function parseArgs(argv) {
   };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
-    if (["--home", "--add", "--forget"].includes(value)) {
+    if (["--home", "--source-root", "--add", "--forget"].includes(value)) {
       const selected = argv[++index];
       if (!selected || selected.startsWith("--")) throw new Error(`${value} requires a value`);
       if (value === "--home") result.home = selected;
+      else if (value === "--source-root") result.sourceRoot = selected;
       else if (value === "--add") result.add = selected;
       else result.forget = selected;
     } else if (value === "--snapshot") result.snapshot = true;
@@ -633,7 +673,7 @@ function parseArgs(argv) {
     else if (value === "--upgrade-all") result.upgradeAll = true;
     else if (value === "--yes") result.yes = true;
     else if (value === "--help") {
-      process.stdout.write("Usage: control-plane [--snapshot] [--json] [--add PATH | --forget ID | --check-updates | --upgrade-all --yes] [--home PATH]\n");
+      process.stdout.write("Usage: control-plane [--snapshot] [--json] [--add PATH | --forget ID | --check-updates | --upgrade-all --yes] [--home PATH] [--source-root PATH]\n");
       process.exit(0);
     } else throw new Error(`Unknown argument: ${value}`);
   }

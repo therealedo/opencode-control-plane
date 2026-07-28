@@ -166,6 +166,15 @@ async function upgradeFinalizedProject(root) {
 }
 
 async function registerFinalizedProject(root) {
+  const localInstall = await readLocalInstall(root)
+  if (localInstall) {
+    try {
+      const result = await registerProject(root, { home: localInstall.manager_home })
+      return { ok: true, registered: true, added: result.added, id: result.project.id, manager_home: localInstall.manager_home }
+    } catch (error) {
+      return { ok: false, registered: false, error: boundedDiagnostic(error?.message ?? error).replace(/^: /, "") }
+    }
+  }
   const explicitHome = process.env.OPENCODE_CONTROL_PLANE_HOME
   const home = path.resolve(explicitHome || os.homedir())
   const installedBin = path.join(home, ".agents", "skills", "init-project", "bin")
@@ -178,6 +187,17 @@ async function registerFinalizedProject(root) {
   } catch (error) {
     return { ok: false, registered: false, error: boundedDiagnostic(error?.message ?? error).replace(/^: /, "") }
   }
+}
+
+async function readLocalInstall(root) {
+  const file = path.join(root, ".opencode-control-plane", "install.json")
+  if (!(await exists(file))) return null
+  const value = await readJson(file, { maxBytes: CONFIG_BYTES })
+  if (
+    value?.schema_version !== 1 || value?.product_id !== "opencode-control-plane" ||
+    path.resolve(value.target ?? "") !== root || typeof value.manager_home !== "string" || !path.isAbsolute(value.manager_home)
+  ) throw new Error("Project-local Control Plane install manifest is invalid")
+  return value
 }
 
 function pathKey(value) {

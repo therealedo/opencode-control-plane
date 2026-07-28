@@ -303,7 +303,7 @@ async function readMetadata(root) {
     const record = parseJson(await readFile(path.join(root, "blueprints", "current", "record.json"), "utf8"), "blueprint record");
     metadata.blueprint_version = record.version;
   } catch {}
-  const skill = await locateInstalledSkill();
+  const skill = await locateInstalledSkill(root);
   if (skill) {
     try {
       const release = parseJson(await readFile(path.join(skill, "assets", "control-plane-release.json"), "utf8"), "installed release");
@@ -336,18 +336,19 @@ async function launchEvolution(root) {
 }
 
 async function launchProjectUpgrade(root) {
-  const skill = await locateInstalledSkill();
-  if (!skill) throw new Error("No global OpenCode Control Plane installation was found. Update the framework installation first.");
-  const updater = path.join(skill, "bin", "upgrade-project.mjs");
+  const sourceRoot = await locateSourceCheckout(root);
+  if (!sourceRoot) throw new Error("The project-local Control Plane source checkout was moved or removed. Run install-project.cmd for this project from a current Control Plane checkout.");
+  const updater = path.join(sourceRoot, "scripts", "install-project.mjs");
   await access(updater);
-  const result = await runCaptured(process.execPath, [updater, "--target", root, "--json"], { cwd: root, timeoutMs: 10 * 60_000 });
+  const result = await runCaptured(process.execPath, [updater, "--target", root, "--json"], { cwd: root, timeoutMs: 15 * 60_000 });
   if (result.code !== 0) throw new Error(parseFailure(result));
   return parseJson(result.stdout, "project upgrade result");
 }
 
-async function locateInstalledSkill() {
+async function locateInstalledSkill(root) {
   const candidates = [
     process.env.OPENCODE_CONTROL_PLANE_SKILL,
+    root ? path.join(root, ".agents", "skills", "init-project") : null,
     path.join(os.homedir(), ".agents", "skills", "init-project"),
   ].filter(Boolean).map((item) => path.resolve(item));
   for (const candidate of candidates) {
@@ -358,6 +359,19 @@ async function locateInstalledSkill() {
     } catch {}
   }
   return null;
+}
+
+async function locateSourceCheckout(root) {
+  try {
+    const manifest = parseJson(await readFile(path.join(root, ".opencode-control-plane", "install.json"), "utf8"), "project-local install manifest");
+    if (manifest?.schema_version !== 1 || manifest?.product_id !== "opencode-control-plane" || typeof manifest.source_root !== "string" || !path.isAbsolute(manifest.source_root)) return null;
+    const source = path.resolve(manifest.source_root);
+    await access(path.join(source, "scripts", "install-project.mjs"));
+    await access(path.join(source, ".agents", "skills", "init-project", "assets", "control-plane-release.json"));
+    return source;
+  } catch {
+    return null;
+  }
 }
 
 function confirmationFor(action) {

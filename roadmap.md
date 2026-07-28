@@ -46,7 +46,17 @@ Blueprint and migration history belong to the cold planning path. They must not 
 
 Repository ownership and runtime placement are separate concerns. Durable product contracts and accepted evidence should remain reviewable with the project, while frequently written state, logs, locks, temporary phase contracts, and executable runtime files should move out of synchronized target repositories when this can be done without weakening recovery, portability, or rollback.
 
-## Current baseline: v1.6.20
+## Current baseline: v1.7.0
+
+- [x] Make installation project-local; stop requiring global skills, commands, or PATH launchers.
+- [x] Add a transactional one-command installer for new and existing projects.
+- [x] Move the fleet registry into the source checkout instead of the user profile.
+- [x] Let projects upgrade independently from their recorded source checkout.
+- [x] Add an independent manual-mode escape hatch that refuses concurrent autonomous work.
+- [x] Add a manifest-verified uninstaller that preserves unrelated global files and migrates the project registry.
+- [x] Keep the source-local fleet dashboard and one-action registered-project updates.
+
+## Previous baseline: v1.6.20
 
 Version 1.6.20 carries forward the v1.6.19 baseline and provides:
 

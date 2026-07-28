@@ -14,8 +14,10 @@ const OUTPUT_CAP = 1024 * 1024;
 const PROCESS_TIMEOUT_MS = 15 * 60_000;
 const DEFAULT_WAIT_MS = 24 * 60 * 60_000;
 const skillRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const updater = path.join(skillRoot, "bin", "upgrade-project.mjs");
 const args = parseArgs(process.argv.slice(2));
+const updater = args.sourceRoot
+  ? path.join(path.resolve(args.sourceRoot), "scripts", "install-project.mjs")
+  : path.join(skillRoot, "bin", "upgrade-project.mjs");
 
 if (isMain()) await main().catch(fatal);
 
@@ -256,13 +258,14 @@ function parseJson(value, label) {
 }
 
 function parseArgs(argv) {
-  const result = { home: null, dryRun: false, json: false, waitMs: DEFAULT_WAIT_MS };
+  const result = { home: null, sourceRoot: null, dryRun: false, json: false, waitMs: DEFAULT_WAIT_MS };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
-    if (["--home", "--wait-ms"].includes(value)) {
+    if (["--home", "--source-root", "--wait-ms"].includes(value)) {
       const selected = argv[++index];
       if (!selected || selected.startsWith("--")) throw new Error(`${value} requires a value`);
       if (value === "--home") result.home = selected;
+      else if (value === "--source-root") result.sourceRoot = selected;
       else {
         result.waitMs = Number(selected);
         if (!Number.isInteger(result.waitMs) || result.waitMs < 1_000 || result.waitMs > DEFAULT_WAIT_MS) throw new Error("--wait-ms must be between 1000 and 86400000");
@@ -270,7 +273,7 @@ function parseArgs(argv) {
     } else if (value === "--dry-run") result.dryRun = true;
     else if (value === "--json") result.json = true;
     else if (value === "--help") {
-      process.stdout.write("Usage: upgrade-all-projects.mjs [--home PATH] [--wait-ms N] [--dry-run] [--json]\n");
+      process.stdout.write("Usage: upgrade-all-projects.mjs [--home PATH] [--source-root PATH] [--wait-ms N] [--dry-run] [--json]\n");
       process.exit(0);
     } else throw new Error(`Unknown argument: ${value}`);
   }

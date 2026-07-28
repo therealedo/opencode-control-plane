@@ -1,6 +1,6 @@
 {
   "name": "opencode-control-plane",
-  "version": "1.6.20",
+  "version": "1.7.0",
   "private": true,
   "type": "module",
   "description": "A high-efficiency, zero-token orchestrator that turns OpenCode into a policy-bounded, self-verifying coding worker.",
@@ -13,8 +13,11 @@
     "url": "https://github.com/therealedo/opencode-control-plane/issues"
   },
   "scripts": {
-    "setup": "node scripts/install.mjs",
-    "upgrade": "node scripts/upgrade.mjs",
+    "setup": "node scripts/install-project.mjs",
+    "project:install": "node scripts/install-project.mjs",
+    "uninstall:global": "node scripts/uninstall-global.mjs",
+    "legacy:global-install": "node scripts/install.mjs",
+    "legacy:global-upgrade": "node scripts/upgrade.mjs",
     "evaluate": "node scripts/evaluate.mjs",
     "validate": "node scripts/validate-source.mjs",
     "test": "node --test tests/*.test.mjs",

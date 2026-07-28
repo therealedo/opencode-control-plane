@@ -3,4 +3,4 @@ description: Compare, plan, or safely apply an initialized project's next bluepr
 agent: build
 ---
 
-Load and follow the globally installed `evolve-project` skill for this repository. Mode or change request: $ARGUMENTS
+Load and follow this repository's project-local `evolve-project` skill. Mode or change request: $ARGUMENTS

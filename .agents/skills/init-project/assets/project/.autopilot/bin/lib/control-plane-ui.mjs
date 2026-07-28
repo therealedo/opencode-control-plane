@@ -24,6 +24,7 @@ export function safeText(value, maxLength = 240) {
 export function controllerMode(status = {}) {
   const live = Boolean(status.controller_lock);
   if (live) return { id: "running", label: "Running", detail: friendlyPhase(status.phase) };
+  if (status.manual_mode) return { id: "manual", label: "Manual mode", detail: "Autonomous work is disabled" };
   if (status.status === "complete") return { id: "complete", label: "Complete", detail: "All accepted work is complete" };
   if (status.status === "human_required") return { id: "human_required", label: "Waiting for you", detail: friendlyPhase(status.phase) };
   if (status.status === "running") {
@@ -48,6 +49,7 @@ export function controllerMode(status = {}) {
 
 export function primaryAction(status = {}) {
   const mode = controllerMode(status);
+  if (mode.id === "manual") return { id: "run", label: "Manual mode enabled", enabled: false, confirm: false };
   if (mode.id === "running") return { id: "pause", label: "Pause safely", enabled: true, confirm: false };
   if (mode.id === "complete") return { id: "run", label: "Project complete", enabled: false, confirm: false };
   if (["paused", "stopped", "maintenance", "maintenance_queued", "human_required", "failed", "interrupted"].includes(mode.id)) {
@@ -118,6 +120,7 @@ export function statusFingerprint(status = {}) {
     status.pause_requested ?? false,
     status.stop_requested ?? false,
     status.maintenance_requested ?? false,
+    status.manual_mode ?? false,
     status.controller_error?.code ?? null,
     status.controller_error?.message ?? null,
   ]);

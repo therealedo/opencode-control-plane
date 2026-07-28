@@ -44,18 +44,20 @@ const assetRoot = path.join(skillRoot, "assets", "project")
 const target = path.resolve(args.target ?? process.cwd())
 const created = []
 
-assertDisjoint(assetRoot, target)
-
 await assertDirectory(assetRoot, "Project template assets are missing")
+const expectedLocalAssetRoot = path.join(target, ".agents", "skills", "init-project", "assets", "project")
+if (normalizePath(assetRoot) !== normalizePath(expectedLocalAssetRoot)) assertDisjoint(assetRoot, target)
 await mkdir(target, { recursive: true })
 await assertRealTarget(target)
-await assertDisjointReal(assetRoot, target)
-await assertSafeTarget(target)
+const bootstrapInstall = await loadBootstrapInstall(target)
+await assertSafeSourceRelationship(assetRoot, target, bootstrapInstall)
+await assertSafeTarget(target, bootstrapInstall)
 
 for (const entry of await readdir(assetRoot, { withFileTypes: true })) {
   const source = path.join(assetRoot, entry.name)
   const destination = path.join(target, entry.name)
-  await copyEntry(source, destination)
+  if (bootstrapInstall && entry.name === ".opencode") await mergeBootstrapEntry(source, destination)
+  else await copyEntry(source, destination)
   created.push(path.relative(target, destination) || entry.name)
 }
 
@@ -68,6 +70,7 @@ await replaceTemplateTokens(target, {
 const toolConfiguration = await configureTools(target)
 await mergeGitignore(target)
 await chmod(path.join(target, "control-plane"), 0o755)
+await chmod(path.join(target, "manual-mode"), 0o755)
 await writeControlPlaneManifest(target)
 await writeScaffoldOwnership(target)
 
@@ -147,8 +150,13 @@ async function installLifecycleScripts() {
   created.push(".autopilot/bin/render-blueprint.mjs", ".autopilot/bin/evolve-blueprint.mjs")
 }
 
-async function assertSafeTarget(directory) {
+async function assertSafeTarget(directory, bootstrapInstall = null) {
   const allowed = new Set([".git", ".gitignore"])
+  if (bootstrapInstall) {
+    allowed.add(".agents")
+    allowed.add(".opencode")
+    allowed.add(".opencode-control-plane")
+  }
   const entries = await readdir(directory)
   const unexpected = entries.filter((entry) => !allowed.has(entry))
   if (unexpected.length > 0) {
@@ -195,6 +203,87 @@ async function assertSafeTarget(directory) {
       throw new Error("Existing .git already has commit history; initialize in a new empty project directory")
     }
   }
+}
+
+async function loadBootstrapInstall(root) {
+  const manifestFile = path.join(root, ".opencode-control-plane", "install.json")
+  if (!(await exists(manifestFile))) return null
+  const info = await lstat(manifestFile)
+  if (!info.isFile() || info.isSymbolicLink() || Number(info.nlink) > 1 || info.size > 1024 * 1024) {
+    throw new Error("Project-local Control Plane install manifest is unsafe")
+  }
+  let manifest
+  try { manifest = JSON.parse(await readFile(manifestFile, "utf8")) }
+  catch (error) { throw new Error(`Project-local Control Plane install manifest is invalid JSON: ${error.message}`) }
+  const expected = new Set([
+    ".agents/skills/evolve-project",
+    ".agents/skills/init-project",
+    ".opencode/commands/evolve-project.md",
+    ".opencode/commands/init-project.md",
+  ])
+  if (
+    manifest?.schema_version !== 1 || manifest?.product_id !== "opencode-control-plane" ||
+    path.resolve(manifest.target ?? "") !== root || !Array.isArray(manifest.outputs) ||
+    manifest.outputs.length !== expected.size
+  ) throw new Error("Project-local Control Plane install manifest has an unsupported shape")
+  for (const output of manifest.outputs) {
+    if (!expected.delete(output?.relative) || !/^[0-9a-f]{64}$/.test(output?.sha256 ?? "")) {
+      throw new Error("Project-local Control Plane install manifest contains an invalid output")
+    }
+    const location = path.join(root, ...output.relative.split("/"))
+    const current = await treeSha256(location)
+    if (current !== output.sha256) throw new Error(`Project-local Control Plane file drifted before initialization: ${output.relative}`)
+  }
+  if (expected.size) throw new Error("Project-local Control Plane install manifest is incomplete")
+  await assertBootstrapContainers(root, manifest)
+  return manifest
+}
+
+async function assertBootstrapContainers(root, manifest) {
+  const owned = manifest.outputs.map((item) => item.relative)
+  for (const container of [".agents", ".opencode", ".opencode-control-plane"]) {
+    const base = path.join(root, container)
+    const files = await walkFilesStrict(base)
+    for (const file of files) {
+      const relative = path.relative(root, file).replaceAll(path.sep, "/")
+      if (relative === ".opencode-control-plane/install.json") continue
+      if (!owned.some((item) => relative === item || relative.startsWith(`${item}/`))) {
+        throw new Error(`Unexpected file exists beside the project-local bootstrap: ${relative}`)
+      }
+    }
+  }
+}
+
+async function walkFilesStrict(root) {
+  const files = []
+  const info = await lstat(root)
+  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`Unsafe bootstrap directory: ${root}`)
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    const location = path.join(root, entry.name)
+    if (entry.isSymbolicLink()) throw new Error(`Bootstrap files cannot contain links: ${location}`)
+    if (entry.isDirectory()) files.push(...await walkFilesStrict(location))
+    else if (entry.isFile()) files.push(location)
+    else throw new Error(`Unsupported bootstrap path: ${location}`)
+  }
+  return files
+}
+
+async function treeSha256(location) {
+  const records = []
+  const walk = async (current, relative = "") => {
+    const info = await lstat(current)
+    if (info.isSymbolicLink()) throw new Error(`Bootstrap files cannot contain links: ${current}`)
+    if (info.isFile()) {
+      records.push(`file\0${relative}\0${createHash("sha256").update(await readFile(current)).digest("hex")}\0`)
+      return
+    }
+    if (!info.isDirectory()) throw new Error(`Unsupported bootstrap path: ${current}`)
+    records.push(`dir\0${relative}\0`)
+    const entries = (await readdir(current, { withFileTypes: true })).sort((left, right) => left.name.localeCompare(right.name, "en"))
+    for (const entry of entries) await walk(path.join(current, entry.name), relative ? `${relative}/${entry.name}` : entry.name)
+  }
+  await walk(location)
+  return createHash("sha256").update(records.join("\n")).digest("hex")
 }
 
 function normalizePath(value) {
@@ -373,6 +462,34 @@ async function copyEntry(source, destination) {
   })
 }
 
+async function mergeBootstrapEntry(source, destination) {
+  const sourceInfo = await lstat(source)
+  if (sourceInfo.isSymbolicLink()) throw new Error(`Template source cannot contain links: ${source}`)
+  if (sourceInfo.isDirectory()) {
+    if (await exists(destination)) {
+      const destinationInfo = await lstat(destination)
+      if (!destinationInfo.isDirectory() || destinationInfo.isSymbolicLink()) {
+        throw new Error(`Bootstrap destination is not a real directory: ${destination}`)
+      }
+    } else await mkdir(destination)
+    for (const entry of await readdir(source, { withFileTypes: true })) {
+      await mergeBootstrapEntry(path.join(source, entry.name), path.join(destination, entry.name))
+    }
+    return
+  }
+  if (!sourceInfo.isFile()) throw new Error(`Unsupported template source: ${source}`)
+  if (await exists(destination)) {
+    const destinationInfo = await lstat(destination)
+    if (!destinationInfo.isFile() || destinationInfo.isSymbolicLink() || Number(destinationInfo.nlink) > 1) {
+      throw new Error(`Bootstrap destination is unsafe: ${destination}`)
+    }
+    const [left, right] = await Promise.all([readFile(source), readFile(destination)])
+    if (!left.equals(right)) throw new Error(`Bootstrap file differs from the project template: ${destination}`)
+    return
+  }
+  await cp(source, destination, { force: false, errorOnExist: true, preserveTimestamps: true })
+}
+
 async function replaceTemplateTokens(root, replacements) {
   const textExtensions = new Set([".md", ".json", ".jsonc", ".txt", ".example", ".mjs"])
   for (const file of await walkFiles(root)) {
@@ -402,12 +519,31 @@ async function mergeGitignore(root) {
 async function walkFiles(root) {
   const files = []
   for (const entry of await readdir(root, { withFileTypes: true })) {
-    if (entry.name === ".git") continue
+    if ([".git", ".agents", ".opencode-control-plane"].includes(entry.name)) continue
     const location = path.join(root, entry.name)
     if (entry.isDirectory()) files.push(...(await walkFiles(location)))
     else if (entry.isFile()) files.push(location)
   }
   return files
+}
+
+async function assertSafeSourceRelationship(source, destination, bootstrapInstall) {
+  const sourceRoot = path.resolve(source)
+  const targetRoot = path.resolve(destination)
+  const nestedSource = path.relative(targetRoot, sourceRoot)
+  if (nestedSource && !nestedSource.startsWith("..") && !path.isAbsolute(nestedSource)) {
+    const expected = path.join(targetRoot, ".agents", "skills", "init-project", "assets", "project")
+    if (!bootstrapInstall || normalizePath(sourceRoot) !== normalizePath(expected)) {
+      throw new Error("Scaffold source nested inside the target is not the verified project-local bootstrap")
+    }
+    const [realSource, realExpected] = await Promise.all([realpath(sourceRoot), realpath(expected)])
+    if (normalizePath(realSource) !== normalizePath(realExpected)) {
+      throw new Error("Project-local scaffold source is redirected")
+    }
+    return
+  }
+  assertDisjoint(sourceRoot, targetRoot)
+  await assertDisjointReal(sourceRoot, targetRoot)
 }
 
 async function assertDirectory(directory, message) {

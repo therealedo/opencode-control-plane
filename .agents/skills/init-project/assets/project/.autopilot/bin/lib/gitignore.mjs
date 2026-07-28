@@ -13,10 +13,13 @@ export const BASE_GITIGNORE_FRAGMENT = [
   ".autopilot/STOP",
   ".autopilot/PAUSED",
   ".autopilot/MAINTENANCE",
+  ".autopilot/MANUAL_MODE",
   ".autopilot/runtime/",
   ".autopilot/artifacts/",
   ".autopilot/evolution/",
   ".autopilot/init/",
+  ".agents/",
+  ".opencode-control-plane/",
 ].join("\n") + "\n";
 
 export const REQUIRED_IGNORED_PATHS = Object.freeze([
@@ -29,10 +32,13 @@ export const REQUIRED_IGNORED_PATHS = Object.freeze([
   ".autopilot/STOP",
   ".autopilot/PAUSED",
   ".autopilot/MAINTENANCE",
+  ".autopilot/MANUAL_MODE",
   ".autopilot/runtime/ignore-policy-probe.json",
   ".autopilot/artifacts/ignore-policy-probe.json",
   ".autopilot/evolution/ignore-policy-probe.json",
   ".autopilot/init/ignore-policy-probe.json",
+  ".agents/skills/init-project/SKILL.md",
+  ".opencode-control-plane/install.json",
 ]);
 
 export const REQUIRED_VISIBLE_PATHS = Object.freeze([

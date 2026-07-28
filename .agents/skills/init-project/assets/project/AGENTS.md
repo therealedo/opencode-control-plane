@@ -4,6 +4,8 @@ An autonomous packet already contains the task and selected project context. Do 
 
 Authority order: user; active blueprint; project security, constraints, and architecture; task spec. Stop on conflict. Autonomous work cannot revise the blueprint. Post-initialization product or architecture changes require a staged version, impact/migration evidence, and approval.
 
+When `.autopilot/MANUAL_MODE` exists, the autonomous controller is deliberately disabled. Follow only explicit user requests, never edit controller-owned state/queue/receipts, and do not restart autonomous work until the user runs `manual-mode off`.
+
 ## Efficiency kernel
 
 Understand the affected flow and callers before editing. Meet current acceptance with the first sufficient option: no change, existing project code, language/platform feature, installed dependency, then minimal new code. Add a dependency, file, abstraction, configuration, or extension point only for a concrete present requirement. Fix shared causes, not isolated symptoms; prefer deletion and direct readable code.

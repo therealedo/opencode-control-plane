@@ -468,17 +468,17 @@ if (!(await exists(readmePath))) {
   if (Buffer.byteLength(readme) > 12 * 1024) errors.push("README.md exceeds the 12 KiB beginner-guide cap")
   for (const required of [
     "# OpenCode Control Plane",
-    "a high-efficiency, zero-token orchestrator that turns OpenCode into a policy-bounded, self-verifying coding worker. Keeping it lean, fast, and terminal-native is its superpower",
+    "high-efficiency, zero-token orchestrator that turns OpenCode into a policy-bounded, self-verifying coding worker. Keeping it lean, fast, and terminal-native is its superpower",
     "https://github.com/therealedo/opencode-control-plane.git",
-    "npm run setup",
-    "npm run upgrade",
-    "`control-plane`",
-    "./control-plane",
+    "install-project.cmd",
+    "scripts/install-project.mjs",
+    "control-plane.cmd",
+    "manual-mode.cmd on",
+    "npm run uninstall:global",
     "Change product blueprint",
     "Update everything",
     "Worker reasoning",
     "Start worker",
-    "GitHub Release",
   ]) {
     if (!readme.includes(required)) errors.push(`README.md is missing beginner contract text: ${required}`)
   }

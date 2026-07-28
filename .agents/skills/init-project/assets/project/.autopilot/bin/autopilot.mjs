@@ -180,6 +180,7 @@ async function status(root) {
     pause_requested: await exists(project.paths.paused),
     stop_requested: await exists(project.paths.stop),
     maintenance_requested: await exists(project.paths.maintenance),
+    manual_mode: await exists(project.paths.manualMode),
     project_status: queue?.project_status ?? null,
     task_counts: counts,
     total_tasks: Object.keys(queue?.tasks ?? {}).length,
@@ -396,6 +397,7 @@ async function signal(root, kind) {
 async function resume(root, shouldDetach) {
   const project = await loadProject(root);
   await assertControlTopology(project, { createMutable: true });
+  await assertManualModeOff(project);
   const active = await liveLock(project);
   if (active) throw new AutopilotError(`Cannot resume while controller PID ${active.pid} is active`, { code: "LOCKED" });
   if (shouldDetach) return { resumed: true, ...(await detach(root, "resume")) };
@@ -414,6 +416,11 @@ async function main() {
   }
   const root = await rootFrom(options);
   await preflightProjectRoot(root);
+  if (["start", "once"].includes(verb)) {
+    const project = await loadProject(root);
+    await assertControlTopology(project, { createMutable: true });
+    await assertManualModeOff(project);
+  }
   let result;
   if (verb === "status") result = await status(root);
   else if (verb === "preflight") {
@@ -425,6 +432,15 @@ async function main() {
   else if (verb === "start" && options.detach && !options.foreground) result = { started: true, ...(await detach(root, "start")) };
   else result = await new Controller(root, { once: verb === "once" }).run();
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+}
+
+async function assertManualModeOff(project) {
+  if (await exists(project.paths.manualMode)) {
+    throw new AutopilotError(
+      "Manual mode is enabled. Run manual-mode off before starting or resuming autonomous work.",
+      { code: "MANUAL_MODE" },
+    );
+  }
 }
 
 main().catch((error) => {

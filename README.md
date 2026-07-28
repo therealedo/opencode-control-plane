@@ -1,161 +1,97 @@
 # OpenCode Control Plane
 
-> a high-efficiency, zero-token orchestrator that turns OpenCode into a policy-bounded, self-verifying coding worker. Keeping it lean, fast, and terminal-native is its superpower
+A high-efficiency, zero-token orchestrator that turns OpenCode into a policy-bounded, self-verifying coding worker. Keeping it lean, fast, and terminal-native is its superpower.
 
-Describe a project once. OpenCode Control Plane divides the work into small tasks, starts fresh coding and review sessions, runs tests, recovers from context limits, and keeps working until it reaches a real human boundary.
+Repository: https://github.com/therealedo/opencode-control-plane.git
 
-The controller and terminal dashboard use no model tokens. Only the OpenCode workers use your chosen model.
+Control Plane is **project-local**. It does not need global skills, global OpenCode commands, or a PATH launcher.
 
-## Install once
+## Install it in a new project
 
-You need OpenCode, Node.js 20 or newer, and Git.
+1. Clone or update this repository.
+2. Create an empty folder for your project.
+3. From this repository, run:
 
-```text
-git clone https://github.com/therealedo/opencode-control-plane.git
-cd opencode-control-plane
-npm run setup
+```powershell
+.\install-project.cmd "C:\path\to\your-project"
 ```
 
-Close and reopen OpenCode and your terminal after setup.
+4. Open that project folder in OpenCode.
+5. Run `/init-project` and complete the interview.
+6. After finalization, open `control-plane.cmd` inside the project and choose **Start worker**.
 
-Setup installs:
+Nothing is installed in your user profile. The project gets its own `init-project` and `evolve-project` skills, OpenCode commands, controller, and dashboard.
 
-- `/init-project` and `/evolve-project` in OpenCode;
-- the global `control-plane` terminal dashboard;
-- no model setting and no global `opencode.json` change.
+## Daily use
 
-If setup says the command folder is not on your PATH, add the exact folder it prints to your user PATH once, then reopen the terminal. Setup never edits your PATH silently.
+Inside an initialized project:
 
-## Start a project
+- `control-plane.cmd` opens that project's dashboard.
+- **Start/Resume worker** runs autonomous development.
+- **Check readiness** performs deterministic zero-token checks.
+- **Worker reasoning** changes the model variant used by the next fresh worker session.
+- **Change product blueprint** starts targeted blueprint evolution.
+- **Upgrade Control Plane** updates only that project from this source checkout.
 
-1. Create an empty project folder.
-2. Open a terminal in it and run `opencode .`.
-3. Enter `/init-project`.
-4. Answer the interview. You can paste an existing project brief or chat first and ask it to question only missing or ambiguous areas.
-5. Give environment-variable names, never secret values.
+From this repository, `control-plane.cmd` opens the fleet dashboard. Its private project list lives in `.control-plane-home/` inside this checkout and is not committed.
 
-You may use one fixed Git prefix or Conventional Commit types per task (`feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `ci`, `build`, or `security`, optionally scoped). The interview records the choice once; workers never spend tokens classifying commits. Initialization creates local commits only and never changes or pushes a remote.
+## Work without Control Plane
 
-If an interview was already open when this support was installed, keep it open. Choose **Type your own answer**, ask the agent to re-read the installed `init-project` skill, and tell it to reuse the policy you already supplied. Finalization safely refreshes the project-owned framework before it renders the blueprint.
+If Control Plane has a bug and you need to work manually:
 
-When the interview is complete, deterministic scripts create the modular project files, Blueprint v1, tests and worker configuration, commit a clean baseline, register the project, and check readiness. They deliberately stop before the first worker starts.
-
-Open `control-plane` in another terminal, select the project, choose **Worker reasoning** until the desired model variant is shown, then choose **Start worker**. This setting applies to every fresh autonomous worker; changing `/variants` in the interview session alone does not carry into those fresh worker sessions.
-
-## Monitor every project
-
-Open a separate terminal anywhere and run:
-
-```text
-control-plane
+```powershell
+.\manual-mode.cmd on
 ```
 
-The first screen shows all registered projects, which workers are running, progress, blueprint versions, problems, and available framework updates.
+This refuses to activate while a worker is running, then blocks autonomous Start/Resume. Work normally with OpenCode using explicit requests.
 
-- Up/Down selects a project; Left/Right selects a visible action; Enter runs it. The active project and option are highlighted in color, with visible arrow hints. Letter shortcuts still work.
-- O or **Open project** opens that project's full controls. It is highlighted by default when a project is available, so Enter opens it immediately. Inside that project, option 8 or Q returns to the main dashboard without pausing, stopping, resuming, or retrying the worker.
-- A or **Add project** opens an in-terminal folder picker. Type to see matching next folders, use Up/Down to choose, Right/Tab to browse into the selected folder, Left to go back, and Enter to validate and add the highlighted folder.
-- F forgets a missing or unwanted entry; it never deletes the project.
-- C checks GitHub for a new release.
-- U updates the Control Plane and registered projects safely.
-- Q closes only the dashboard; workers keep running.
+When ready to return:
 
-Inside a project you can set worker reasoning, check readiness, start, pause, stop, resume, update its blueprint, or return to the wide view. Pause first if you want to change reasoning while a project is already running. The old project-local `control-plane.cmd` or `./control-plane` launcher remains available as a fallback; when launched directly, option 8 or Q closes it and returns a usable terminal while the worker keeps running.
-
-The dashboard runs only while its terminal is open. There is no server, daemon, browser UI, database, or background model session.
-
-## When a requirement changes
-
-Open the project from `control-plane` and choose **Change product blueprint**.
-
-The system uses the existing blueprint and project memory, asks only about the changed area, and classifies the change:
-
-- documentation changes update metadata;
-- feature changes add implementation tasks;
-- architecture changes create a new blueprint version and migration plan.
-
-Application code is not rebuilt during planning. Breaking or destructive work requires your approval and a rollback plan.
-
-## Update everything
-
-The dashboard checks the public repository's latest stable tagged release automatically when it opens. Network failure never blocks project control.
-
-When an update is shown, press U once. The Control Plane will:
-
-1. download the exact public release tag;
-2. validate and transactionally update the global installation;
-3. ask running projects to finish their current safe unit;
-4. update each registered project with its trusted global updater;
-5. create a reversible local Git commit in each changed project;
-6. resume only workers that were running before the update.
-
-It never kills a worker, silently adopts a legacy project, overwrites application code, or hides a failed project. If one project is dirty, unavailable, or blocked, other safe projects still update. A recognized older controller failure is passed to the guarded project upgrader only when Git and bounded state evidence prove the exact recovery is safe; every unrecognized blocked state fails closed for review. After a structural recovery, the successful upgrade clears the maintenance request it already fulfilled, but it never starts the worker automatically: run **Check readiness**, then choose **Resume** once.
-
-### Upgrade from Control Plane 1.0
-
-Version 1.0 does not yet have the global dashboard. From your Control Plane repository, run once:
-
-```text
-npm run upgrade -- --local
+```powershell
+.\manual-mode.cmd off
 ```
 
-Then reopen the terminal, run `control-plane`, choose **Add project**, and select each existing initialized project folder. Choose **Update everything** to update the registered projects. A pre-versioned legacy project is never adopted automatically; use its separately reviewed adoption command when the dashboard tells you it is required.
+Then run **Check readiness** before resuming the worker.
 
-## Secrets and test accounts
+## Update
 
-Store real test credentials only in the ignored local environment file selected during initialization. The blueprint, prompts, project memory, Git history, receipts, screenshots, and registry must contain names only.
+Update this repository, then use either:
 
-Use limited test tenants—not production or personal accounts. Control Plane injects a credential only into the approved gate or integration scope that needs it.
+- **Update everything** in this repository's fleet dashboard; or
+- **Upgrade Control Plane** inside one project.
 
-Local workers are policy-bounded, not operating-system sandboxed. OpenCode and programs launched by tests retain your operating-system account's access; use a container, VM, restricted account, and network controls for untrusted toolchains.
+Every project keeps its own installed version. A broken release in one project does not prevent manual work in another.
 
-## How it stays efficient
+## Remove the old global installation
 
-- Scripts create and update known structures instead of asking a model to write boilerplate.
-- `AGENTS.md` is a small manual/recovery router and is not reloaded into every autonomous phase.
-- Each task, repair, and independent review uses a fresh OpenCode session.
-- A deterministic compiler sends only the task's selected project facts, paths, tools, and test credentials while preserving code blocks exactly.
-- Workers inspect narrowly, reuse existing/native capabilities before adding code, and reviewers reject needless files, dependencies, configuration, and abstractions without relaxing quality or safety.
-- Tests, Git transitions, status polling, upgrades, and context handoffs are deterministic and token-free.
-- Dependency resolution and later frozen installs are controller-owned and token-free; a worker is not asked to repair package-manager setup.
-- The controller derives the authoritative changed-file list once from validated Git evidence; workers do not spend output tokens describing facts the controller already knows.
-- Per-task Conventional Commit prefixes live in controller configuration, outside worker prompts.
-- Tool results and worker contracts are paginated and bounded; full evidence stays in artifacts instead of prompts.
-- Blueprints and receipts preserve durable memory without growing every prompt, while receipts record actual model usage for release comparisons.
+Preview exactly what will be removed:
 
-## If something goes wrong
-
-- **`control-plane` is not recognized:** reopen the terminal. If it still fails, add the setup-reported command folder to your user PATH.
-- **Not ready:** open the project and choose **Check readiness**; fix the first named item, then Start.
-- **Waiting for you:** complete the exact action shown, then Resume.
-- **OpenCode asks you to sign in again:** update to v1.6.8 or newer. The worker pauses after the first authentication failure without spending an attempt; sign in, then choose **Resume**.
-- **An older project is blocked by path, Corepack, lockfile, runner, or gate errors:** choose **Update everything** and install v1.6.20 or newer. Its guarded recovery preserves proven project work and blueprint history, repairs the controller, restores eligible attempt budgets, and records rollback evidence. Reopen the project, choose **Check readiness**, and then choose **Resume** once. A successful structural recovery clears the maintenance request it already fulfilled, so it does not immediately pause at the same maintenance boundary again.
-- **Readiness reports that the project's pinned Node version does not match your terminal:** switch the terminal to the exact supported Node major shown by Control Plane, reopen the dashboard, and check readiness again. Do not weaken the blueprint's engine requirement merely to make the warning disappear; this local environment boundary spends no worker tokens or task attempt.
-- **OpenCode failed without a useful reason:** v1.6.6 and newer retain a short sanitized diagnostic, never the raw provider output or detected credential values.
-- **Update deferred:** resolve the active blocker or dirty Git worktree, return to a safe boundary, and press U again.
-- **Managed-file drift:** do not force the update. Restore or review the named Control Plane-owned file first.
-- **Project moved:** press F on the missing entry, then A and select its new folder.
-
-## Maintainers
-
-Keep the system dependency-free and put deterministic work in scripts. Every behavior release must use the same version in `package.json` and `control-plane-release.json`, a matching `vMAJOR.MINOR.PATCH` Git tag, and a stable GitHub Release.
-
-```text
-node scripts/evaluate.mjs --simulate
-npm run check
-npm run upgrade -- --local --all-projects
+```powershell
+npm run uninstall:global -- --dry-run
 ```
 
-The evaluation command above uses only disposable fake-worker projects and no model. Live provider comparisons are a separate explicit, budgeted maintainer action; see the evaluation guide.
+Then remove only manifest-owned Control Plane files:
 
-More detail:
+```powershell
+npm run uninstall:global
+```
 
-- [Product roadmap](roadmap.md)
-- [Architecture and context lifecycle](docs/architecture.md)
-- [Token-efficiency design and measurements](docs/token-efficiency.md)
-- [Disposable evaluation and live comparison](docs/evaluation.md)
-- [Blueprint initialization and evolution](docs/blueprints.md)
-- [Security boundaries](docs/security.md)
-- [Maintenance and releases](docs/maintenance.md)
+The uninstaller preserves unrelated skills and OpenCode configuration and migrates the old project list into this checkout's local fleet dashboard.
 
-Repository: [therealedo/opencode-control-plane](https://github.com/therealedo/opencode-control-plane)
+## What each important file does
+
+- `install-project.cmd`: installs or refreshes Control Plane in one project.
+- `control-plane.cmd`: opens the source-local fleet dashboard.
+- `scripts/install-project.mjs`: guarded transactional project installer.
+- `scripts/uninstall-global.mjs`: manifest-verified legacy global removal.
+- `.agents/skills/init-project/`: initialization interview, scaffold, controller template, and upgrade logic.
+- `.agents/skills/evolve-project/`: versioned blueprint changes and migration planning.
+- `roadmap.md`: shipped work and planned releases.
+
+## Safety model
+
+- Never overwrites project-local Control Plane files that drifted outside the installer.
+- Never automatically deletes application code or an initialized project.
+- Upgrades use the existing guarded project migration path.
+- Global removal deletes only hash-verified manifest-owned outputs.
+- Manual mode and autonomous mode cannot run at the same time.

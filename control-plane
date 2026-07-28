@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec node "$ROOT/.agents/skills/init-project/bin/control-plane-global.mjs" --home "$ROOT/.control-plane-home" --source-root "$ROOT" "$@"

@@ -25,6 +25,7 @@ export const DEFAULT_PATHS = Object.freeze({
   stop: ".autopilot/STOP",
   paused: ".autopilot/PAUSED",
   maintenance: ".autopilot/MAINTENANCE",
+  manualMode: ".autopilot/MANUAL_MODE",
   lock: ".git/autopilot-controller.lock",
   credentials: ".autopilot/credentials.json",
 });
@@ -94,7 +95,7 @@ export async function assertControlTopology(project, { createMutable = false } =
   // Runtime state is intentionally ignored and may be absent in a clean clone.
   await assertPrivateFile(project.root, project.paths.state, "state control file", { optional: true });
   await assertPrivateFile(project.root, project.paths.credentials, "credential metadata", { optional: true });
-  for (const key of ["checkpoint", "blocker", "stop", "paused", "maintenance", "lock"]) {
+  for (const key of ["checkpoint", "blocker", "stop", "paused", "maintenance", "manualMode", "lock"]) {
     await assertPrivateFile(project.root, project.paths[key], `${key} control file`, { optional: true });
   }
 

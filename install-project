@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+if [ "$#" -lt 1 ]; then
+  echo "Usage: ./install-project PROJECT_FOLDER" >&2
+  exit 2
+fi
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec node "$ROOT/scripts/install-project.mjs" --target "$1"

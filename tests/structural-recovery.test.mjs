@@ -24,7 +24,7 @@ const repairedControllerBlocker = {
   resume_condition: "Readiness reports ready and the user explicitly resumes the preserved task.",
 };
 
-async function nextReleaseSkill(t, version = "1.6.20") {
+async function nextReleaseSkill(t, version = "1.7.0") {
   const parent = await mkdtemp(path.join(os.tmpdir(), "ocp-structural-release-"));
   t.after(() => rm(parent, { recursive: true, force: true }));
   const source = path.join(repositoryRoot, ".agents", "skills");
@@ -261,7 +261,7 @@ test("a recovery fault after the first runtime mutation restores the exact pre-u
 
 test("v1.6.19 structural recovery bridge clears stale maintenance without a second refund", async (t) => {
   const root = await createScaffold(t, { ready: true });
-  const sourceSkill = await nextReleaseSkill(t, "1.6.20");
+  const sourceSkill = await nextReleaseSkill(t, "1.7.0");
   const stateFile = path.join(root, ".autopilot", "state.json");
   const queueFile = path.join(root, ".project", "plan", "queue.json");
   const candidateFile = path.join(root, ".autopilot", "runtime", "candidate.json");
@@ -352,7 +352,7 @@ test("v1.6.19 structural recovery bridge clears stale maintenance without a seco
   const upgradedManifest = await readJson(manifestFile);
   assert.deepEqual(upgradedManifest.migration_history.at(-1), {
     from_version: "1.6.19",
-    to_version: "1.6.20",
+    to_version: "1.7.0",
     applied_at: upgradedManifest.migration_history.at(-1).applied_at,
     kind: "upgrade-recovery",
     recovered_task: "M001",

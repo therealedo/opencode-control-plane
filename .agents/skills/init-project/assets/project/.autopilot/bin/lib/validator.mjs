@@ -521,7 +521,7 @@ function safeManagedPath(relative) {
     !path.posix.isAbsolute(relative) &&
     !relative.split("/").some((part) => !part || part === "." || part === "..") &&
     (
-      [".gitattributes", "AGENTS.md", ".ignore", "control-plane", "control-plane.cmd"].includes(relative) ||
+      [".gitattributes", "AGENTS.md", ".ignore", "control-plane", "control-plane.cmd", "manual-mode", "manual-mode.cmd"].includes(relative) ||
       relative.startsWith(".autopilot/bin/") ||
       relative.startsWith(".opencode/agents/") ||
       relative.startsWith(".opencode/commands/")
