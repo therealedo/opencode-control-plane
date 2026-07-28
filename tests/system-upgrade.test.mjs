@@ -9,6 +9,7 @@ import { createScaffold, git, readJson, repositoryRoot, run, writeJson } from ".
 const installer = path.join(repositoryRoot, "scripts", "install.mjs");
 const upgrader = path.join(repositoryRoot, "scripts", "upgrade.mjs");
 const fleetUpgrader = path.join(repositoryRoot, ".agents", "skills", "init-project", "bin", "upgrade-all-projects.mjs");
+const localInstaller = path.join(repositoryRoot, "scripts", "install-project.mjs");
 
 test("one-command upgrade validates source and previews the owned global update", async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), "control-plane-system-upgrade-"));
@@ -31,7 +32,7 @@ test("one-command upgrade validates source and previews the owned global update"
   assert.equal(output.validation.ok, true);
   assert.equal(output.global_install.upgrade, true);
   assert.equal(output.global_install.dry_run, true);
-  assert.equal(output.global_install.control_plane_version, "1.7.0");
+  assert.equal(output.global_install.control_plane_version, "1.7.1");
 });
 
 test("one-command dry-run previews every registered initialized project", async (t) => {
@@ -59,6 +60,42 @@ test("one-command dry-run previews every registered initialized project", async 
   assert.equal(output.project_upgrades.complete, true);
   assert.equal(output.project_upgrades.results[0].name, "Producer Scribe");
   assert.equal(output.project_upgrades.results[0].status, "current");
+});
+
+test("source-backed fleet dry-run reports a runtime-only upgrade as preview", async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "control-plane-runtime-preview-"));
+  const project = await mkdtemp(path.join(os.tmpdir(), "control-plane-runtime-project-"));
+  t.after(async () => Promise.all([
+    rm(home, { recursive: true, force: true }),
+    rm(project, { recursive: true, force: true }),
+  ]));
+  const bootstrap = await run([process.execPath, localInstaller, "--target", project, "--json"], { cwd: repositoryRoot });
+  assert.equal(bootstrap.code, 0, bootstrap.stderr || bootstrap.stdout);
+  const scaffold = path.join(project, ".agents", "skills", "init-project", "bin", "scaffold.mjs");
+  const initialized = await run([process.execPath, scaffold, "--target", project, "--json"], { cwd: project });
+  assert.equal(initialized.code, 0, initialized.stderr || initialized.stdout);
+  const manifestFile = path.join(project, ".autopilot", "control-plane.json");
+  const manifest = await readJson(manifestFile);
+  manifest.version = "1.6.20";
+  await writeJson(manifestFile, manifest);
+  await git(project, ["add", ".autopilot/control-plane.json"]);
+  await git(project, ["commit", "-m", "test: model runtime-only v1.6.20 project"]);
+  await registerProject(project, { home, name: "Runtime-only project" });
+
+  const preview = await run([
+    process.execPath,
+    fleetUpgrader,
+    "--home", home,
+    "--source-root", repositoryRoot,
+    "--dry-run",
+    "--json",
+  ], { cwd: repositoryRoot });
+  assert.equal(preview.code, 0, preview.stderr || preview.stdout);
+  const result = JSON.parse(preview.stdout).results[0];
+  assert.equal(result.status, "preview");
+  assert.equal(result.from_version, "1.6.20");
+  assert.equal(result.to_version, "1.7.1");
+  assert.deepEqual(result.changed_files, []);
 });
 
 test("fleet upgrade reaches the guarded exhausted-launch recovery instead of deferring it", async (t) => {

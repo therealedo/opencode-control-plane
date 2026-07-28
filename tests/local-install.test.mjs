@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { createScaffold, readJson, writeJson } from "./runtime-helpers.mjs";
 
 const source = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const installer = path.join(source, "scripts", "install-project.mjs");
@@ -19,7 +20,7 @@ test("project-local bootstrap initializes without global files and manual mode b
   const installed = run(installer, ["--target", target, "--json"]);
   assert.equal(installed.status, 0, installed.stderr);
   const manifest = JSON.parse(await readFile(path.join(target, ".opencode-control-plane", "install.json"), "utf8"));
-  assert.equal(manifest.version, "1.7.0");
+  assert.equal(manifest.version, "1.7.1");
   await access(path.join(target, ".agents", "skills", "init-project", "SKILL.md"));
   assert.match(await readFile(path.join(target, ".opencode", "commands", "init-project.md"), "utf8"), /project-local/);
 
@@ -44,6 +45,24 @@ test("project-local installer refuses drift instead of overwriting it", async (t
   assert.notEqual(second.status, 0);
   assert.match(second.stderr, /drifted outside the installer/);
   assert.equal(await readFile(skill, "utf8"), "user change\n");
+});
+
+test("bootstrap-only adoption leaves every older runtime-owned file untouched", async (t) => {
+  const target = await createScaffold(t, { ready: true });
+  const runtimeFile = path.join(target, ".autopilot", "control-plane.json");
+  const runtime = await readJson(runtimeFile);
+  runtime.version = "1.6.20";
+  await writeJson(runtimeFile, runtime);
+
+  const preview = run(installer, ["--target", target, "--bootstrap-only", "--dry-run", "--json"]);
+  assert.equal(preview.status, 0, preview.stderr);
+  const output = JSON.parse(preview.stdout);
+  assert.equal(output.runtime_upgrade.required, true);
+  assert.equal(output.runtime_upgrade.skipped, "bootstrap-only migration");
+  assert.deepEqual(output.actions.map((item) => item.relative).sort(), [
+    ".agents/skills/evolve-project",
+    ".agents/skills/init-project",
+  ]);
 });
 
 test("global uninstaller removes only manifest-owned outputs", async (t) => {

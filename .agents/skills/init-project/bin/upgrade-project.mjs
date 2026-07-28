@@ -36,12 +36,22 @@ import {
 } from "../assets/project/.autopilot/bin/lib/process.mjs";
 import { controllerCommitMessage } from "../assets/project/.autopilot/bin/lib/commit-policy.mjs";
 import { acquireProjectLease } from "../assets/project/.autopilot/bin/lib/git.mjs";
+import {
+  upgradeBaseGitignoreFragment,
+} from "../assets/project/.autopilot/bin/lib/gitignore.mjs";
 
 const PROCESS_TIMEOUT_MS = 10 * 60_000;
 const PROCESS_OUTPUT_BYTES = 1024 * 1024;
 const MANIFEST_BYTES = 512 * 1024;
 const RECOVERY_ROLLBACK_BYTES = 1024 * 1024;
 const RECOVERY_ROLLBACK_PREFIX = "control-plane-upgrade-rollback-";
+const V170_PROJECT_LOCAL_OVERLAP = new Set([
+  ".autopilot/bin/manual-mode.mjs",
+  ".opencode/commands/evolve-project.md",
+  ".opencode/commands/init-project.md",
+  "manual-mode",
+  "manual-mode.cmd",
+]);
 const COREPACK_BLOCKER = Object.freeze({
   kind: "gate_configuration",
   message: "The authoritative gate argv resolves `corepack` to a Windows `.cmd` shim without a matching PowerShell shim; gate/control files are outside the allowed paths and may not be changed.",
@@ -112,10 +122,14 @@ async function main() {
       "ADOPTION_REQUIRED",
     );
   }
-  if (previous) await validatePreviousManifest(target, previous);
+  const trustedLocalInstallPaths = previous
+    ? await trustedProjectLocalInstallPaths(target, release, entries, previous)
+    : new Set();
+  if (previous) await validatePreviousManifest(target, previous, { trustedLocalInstallPaths });
   const state = await readBoundedJson(path.join(target, ".autopilot", "state.json"), 64 * 1024, { optional: true }) ?? {};
   const recoveryBoundary = await assertSafeControllerBoundary(target, state, previous, {
     leaseOwned: projectLease !== null,
+    trustedLocalInstallPaths,
   });
   if (previous && compareVersions(previous.version, release.version) > 0) {
     throw upgradeError(`Downgrades are not allowed (${previous.version} -> ${release.version})`, "DOWNGRADE_DENIED");
@@ -124,13 +138,22 @@ async function main() {
     if (args.adopt || !previous) throw upgradeError("Interview refresh requires existing versioned ownership", "INTERVIEW_REFRESH_DENIED");
     await assertInterviewBoundary(target, state);
   } else {
-    await assertCleanGit(target, { allowedDirty: recoveryBoundary?.allowedDirty ?? [] });
+    await assertCleanGit(target, {
+      allowedDirty: [...new Set([
+        ...(recoveryBoundary?.allowedDirty ?? []),
+        ...trustedLocalInstallPaths,
+      ])],
+    });
   }
 
   const candidates = new Map();
   for (const [relative, entry] of entries) {
     const destination = resolveManaged(target, relative);
     const current = await readManagedFile(destination, { optional: true });
+    if (trustedLocalInstallPaths.has(relative)) {
+      candidates.set(relative, Buffer.from(entry.bytes));
+      continue;
+    }
     if (!current && entry.mode !== "exact") {
       candidates.set(relative, Buffer.from(entry.bytes));
       continue;
@@ -138,6 +161,8 @@ async function main() {
     const candidate = mergeManagedSource(entry, current ?? Buffer.alloc(0), { adopt: args.adopt && !previous });
     if (!current || !candidate.equals(current)) candidates.set(relative, candidate);
   }
+  const gitignoreCandidate = await planBaseGitignoreUpgrade(target);
+  if (gitignoreCandidate) candidates.set(".gitignore", gitignoreCandidate);
 
   if (previous && previous.version === release.version && candidates.size > 0) {
     throw upgradeError(
@@ -158,6 +183,7 @@ async function main() {
     retained_retired_files: Object.keys(previous?.managed_files ?? {}).filter((relative) => !entries.has(relative)),
     recovered_active_task: recoveryBoundary?.taskId ?? null,
     recovery_kind: recoveryBoundary?.kind ?? null,
+    reconciled_local_install_files: [...trustedLocalInstallPaths].sort(),
   };
   if (args.dryRun) return preview;
   if (!preview.changed) return { ...preview, commit: null, rollback: null };
@@ -538,7 +564,7 @@ async function stageManifestSwap(target, manifestFile, manifest, nonce) {
   };
 }
 
-async function validatePreviousManifest(target, manifest) {
+async function validatePreviousManifest(target, manifest, { trustedLocalInstallPaths = new Set() } = {}) {
   if (
     manifest.schema_version !== 1 ||
     manifest.product_id !== "opencode-control-plane" ||
@@ -560,6 +586,7 @@ async function validatePreviousManifest(target, manifest) {
     const file = resolveManaged(target, relative);
     const bytes = await readManagedFile(file);
     if (hashManaged(record.mode, bytes) !== record.sha256) {
+      if (trustedLocalInstallPaths.has(relative)) continue;
       throw upgradeError(
         `Managed framework file changed outside the upgrade system: ${relative}`,
         "CONTROL_PLANE_DRIFT",
@@ -569,7 +596,74 @@ async function validatePreviousManifest(target, manifest) {
   }
 }
 
-async function assertSafeControllerBoundary(target, state, previous, { leaseOwned = false } = {}) {
+async function trustedProjectLocalInstallPaths(target, release, entries, previous) {
+  if (compareVersions(previous.version, release.version) >= 0) return new Set();
+  const file = path.join(target, ".opencode-control-plane", "install.json");
+  const manifest = await readBoundedJson(file, MANIFEST_BYTES, { optional: true });
+  if (!manifest) return new Set();
+  if (
+    manifest.schema_version !== 1 || manifest.product_id !== "opencode-control-plane" ||
+    typeof manifest.version !== "string" || !/^\d+\.\d+\.\d+$/.test(manifest.version) ||
+    manifest.version !== "1.7.0" ||
+    compareVersions(previous.version, manifest.version) >= 0 ||
+    compareVersions(manifest.version, release.version) >= 0 ||
+    manifest.repository !== release.repository ||
+    typeof manifest.target !== "string" || !path.isAbsolute(manifest.target) ||
+    normalizePath(manifest.target ?? "") !== normalizePath(target) ||
+    !Array.isArray(manifest.outputs) || manifest.outputs.length < 1 || manifest.outputs.length > 64
+  ) return new Set();
+
+  const outputs = new Map();
+  for (const output of manifest.outputs) {
+    if (
+      !output || typeof output !== "object" || Array.isArray(output) ||
+      Object.keys(output).sort().join("\0") !== "relative\0sha256" ||
+      typeof output.relative !== "string" || !/^[0-9a-f]{64}$/.test(output.sha256 ?? "") ||
+      outputs.has(output.relative.toLowerCase())
+    ) return new Set();
+    outputs.set(output.relative.toLowerCase(), output);
+  }
+
+  const status = splitZero((await git(target, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])).stdout);
+  const dirty = new Map();
+  for (const record of status) {
+    if (record.length < 4) continue;
+    dirty.set(record.slice(3).replaceAll("\\", "/").toLowerCase(), record.slice(0, 2));
+  }
+  const trusted = new Set();
+  for (const [relative, entry] of entries) {
+    if (entry.mode !== "exact" || !V170_PROJECT_LOCAL_OVERLAP.has(relative)) continue;
+    const record = outputs.get(relative.toLowerCase());
+    const worktreeStatus = dirty.get(relative.toLowerCase());
+    if (!record || ![" M", "??"].includes(worktreeStatus)) continue;
+    if (record.sha256 !== treeSha256Bytes(entry.bytes)) continue;
+    const current = await readManagedFile(resolveManaged(target, relative), { optional: true });
+    if (current?.equals(entry.bytes)) trusted.add(relative);
+  }
+  return trusted;
+}
+
+async function planBaseGitignoreUpgrade(target) {
+  const file = resolveManaged(target, ".gitignore");
+  const current = await readManagedFile(file);
+  if (current.length > 256 * 1024) {
+    throw upgradeError("Project .gitignore exceeds the safe migration limit", "GITIGNORE_MIGRATION_UNSAFE");
+  }
+  const migrated = upgradeBaseGitignoreFragment(current.toString("utf8"));
+  if (migrated === null) {
+    throw upgradeError(
+      "Project .gitignore does not contain one recognized final Control Plane base-ignore fragment",
+      "GITIGNORE_MIGRATION_UNSAFE",
+    );
+  }
+  const bytes = Buffer.from(migrated, "utf8");
+  return bytes.equals(current) ? null : bytes;
+}
+
+async function assertSafeControllerBoundary(target, state, previous, {
+  leaseOwned = false,
+  trustedLocalInstallPaths = new Set(),
+} = {}) {
   if (!leaseOwned) {
     const lock = path.join(target, ".git", "autopilot-controller.lock");
     const lockInspection = await inspectProcessLock(lock, { expectedRoot: target });
@@ -645,8 +739,12 @@ async function assertSafeControllerBoundary(target, state, previous, { leaseOwne
     ? previous.migration_history.at(-1)
     : null;
   const priorRecoveryFailure = state.last_failure_evidence?.failure;
+  const priorStructuralFromVersion = new Map([
+    ["1.6.19", "1.6.18"],
+    ["1.6.20", "1.6.19"],
+  ]).get(previous?.version);
   const priorStructuralRecovery =
-    previous?.version === "1.6.19" &&
+    priorStructuralFromVersion !== undefined &&
     candidate === null &&
     state.run_id === null && state.started_at === null &&
     state.last_failure_fingerprint === null && state.no_progress_count === 0 &&
@@ -662,7 +760,7 @@ async function assertSafeControllerBoundary(target, state, previous, { leaseOwne
     priorMigration && typeof priorMigration === "object" && !Array.isArray(priorMigration) &&
     Object.keys(priorMigration).sort().join("\0") ===
       "applied_at\0from_version\0kind\0recovered_task\0recovery_reason\0to_version" &&
-    priorMigration.from_version === "1.6.18" && priorMigration.to_version === "1.6.19" &&
+    priorMigration.from_version === priorStructuralFromVersion && priorMigration.to_version === previous.version &&
     priorMigration.kind === "upgrade-recovery" && priorMigration.recovered_task === taskId &&
     priorMigration.recovery_reason === "controller-tool-structural" &&
     typeof priorMigration.applied_at === "string" && Number.isFinite(Date.parse(priorMigration.applied_at));
@@ -694,10 +792,15 @@ async function assertSafeControllerBoundary(target, state, previous, { leaseOwne
     }
     const dirtyRecords = splitZero((await git(target, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])).stdout);
     const taskDirtyPaths = [];
+    const installerDirtyPaths = [];
     for (const record of dirtyRecords) {
       const status = record.slice(0, 2);
       const file = record.slice(3).replaceAll("\\", "/");
       if (file === queueRelative && status === " M") continue;
+      if (trustedLocalInstallPaths.has(file) && [" M", "??"].includes(status)) {
+        installerDirtyPaths.push(file);
+        continue;
+      }
       if (![" M", "??"].includes(status) || !isAllowedPath(file, task.allowed_paths)) {
         throw upgradeError("The controller-tool recovery contains changes outside its approved task paths", "ACTIVE_TASK");
       }
@@ -707,7 +810,7 @@ async function assertSafeControllerBoundary(target, state, previous, { leaseOwne
     if (taskDirtyPaths.length > 512) {
       throw upgradeError("The controller-tool recovery exceeds its preserved-file limit", "ACTIVE_TASK");
     }
-    const allowedDirty = [queueRelative, ...taskDirtyPaths];
+    const allowedDirty = [queueRelative, ...installerDirtyPaths, ...taskDirtyPaths];
     await assertCleanGit(target, { allowedDirty });
     const headQueueResult = await git(target, ["show", `HEAD:${queueRelative}`]);
     if (Buffer.byteLength(headQueueResult.stdout, "utf8") > MANIFEST_BYTES) {
@@ -2125,6 +2228,11 @@ function compareVersions(left, right) {
   const b = parts(right);
   for (let index = 0; index < 3; index += 1) if (a[index] !== b[index]) return a[index] > b[index] ? 1 : -1;
   return 0;
+}
+
+function treeSha256Bytes(bytes) {
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  return createHash("sha256").update(`file\0\0${digest}\0`).digest("hex");
 }
 
 function normalizePath(value) {

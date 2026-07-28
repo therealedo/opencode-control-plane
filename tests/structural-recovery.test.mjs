@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -23,8 +24,23 @@ const repairedControllerBlocker = {
   required_action: "Run the zero-token readiness check, then use explicit Resume to retry the preserved task.",
   resume_condition: "Readiness reports ready and the user explicitly resumes the preserved task.",
 };
+const v170LocalOverlap = [
+  ".autopilot/bin/manual-mode.mjs",
+  ".opencode/commands/evolve-project.md",
+  ".opencode/commands/init-project.md",
+  "manual-mode",
+  "manual-mode.cmd",
+];
 
-async function nextReleaseSkill(t, version = "1.7.0") {
+function exactHash(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function installerTreeHash(bytes) {
+  return createHash("sha256").update(`file\0\0${exactHash(bytes)}\0`).digest("hex");
+}
+
+async function nextReleaseSkill(t, version = "1.7.1") {
   const parent = await mkdtemp(path.join(os.tmpdir(), "ocp-structural-release-"));
   t.after(() => rm(parent, { recursive: true, force: true }));
   const source = path.join(repositoryRoot, ".agents", "skills");
@@ -56,6 +72,176 @@ async function markInstalledVersion(root, version) {
   await git(root, ["add", ".autopilot/control-plane.json"]);
   await git(root, ["commit", "-m", `test: model installed Control Plane ${version}`]);
 }
+
+async function createV170MixedProject(t, { tamper = false } = {}) {
+  const root = await createScaffold(t, { ready: true });
+  const sourceSkill = await nextReleaseSkill(t, "1.7.1");
+  const stateFile = path.join(root, ".autopilot", "state.json");
+  const queueFile = path.join(root, ".project", "plan", "queue.json");
+  const candidateFile = path.join(root, ".autopilot", "runtime", "candidate.json");
+  const manifestFile = path.join(root, ".autopilot", "control-plane.json");
+  const runtime = await readJson(manifestFile);
+  const queue = await readJson(queueFile);
+  const state = await readJson(stateFile);
+
+  queue.tasks.M001.allowed_paths = ["package.json", "pnpm-lock.yaml", "apps/**"];
+  for (const relative of [
+    ".opencode/commands/evolve-project.md",
+    ".opencode/commands/init-project.md",
+  ]) {
+    const bytes = Buffer.from(`legacy ${relative}\n`, "utf8");
+    await writeFile(path.join(root, ...relative.split("/")), bytes);
+    runtime.managed_files[relative].sha256 = exactHash(bytes);
+  }
+  for (const relative of [".autopilot/bin/manual-mode.mjs", "manual-mode", "manual-mode.cmd"]) {
+    await rm(path.join(root, ...relative.split("/")), { force: true });
+    delete runtime.managed_files[relative];
+  }
+  runtime.version = "1.6.20";
+  runtime.migration_history.push({
+    from_version: "1.6.19",
+    to_version: "1.6.20",
+    applied_at: "2026-07-28T02:00:30.625Z",
+    kind: "upgrade-recovery",
+    recovered_task: "M001",
+    recovery_reason: "controller-tool-structural",
+  });
+  await writeJson(queueFile, queue);
+  await writeJson(manifestFile, runtime);
+  const gitignoreFile = path.join(root, ".gitignore");
+  const gitignore = await readFile(gitignoreFile, "utf8");
+  await writeFile(gitignoreFile, gitignore
+    .replace("# BEGIN OPENCODE CONTROL PLANE BASE IGNORES\n", "")
+    .replace("# END OPENCODE CONTROL PLANE BASE IGNORES\n", "")
+    .replace(".autopilot/MANUAL_MODE\n", "")
+    .replace(".agents/\n", "")
+    .replace(".opencode-control-plane/\n", ""), "utf8");
+  await git(root, ["add", "-A"]);
+  await git(root, ["commit", "-m", "test: model the v1.6.20 runtime boundary"]);
+  const baseline = await git(root, ["rev-parse", "HEAD"]);
+
+  Object.assign(state, {
+    revision: Number(state.revision ?? 0) + 1,
+    run_id: null,
+    status: "human_required",
+    phase: "blocked",
+    pid: null,
+    started_at: null,
+    active_task: "M001",
+    attempt: 1,
+    no_progress_count: 0,
+    last_progress_hash: null,
+    last_failure_fingerprint: null,
+    last_failure_evidence: {
+      failure: {
+        code: "CONTROLLER_TOOL_RECOVERED",
+        message: "The v1.6.20 structural upgrade preserved the dependency workspace.",
+      },
+    },
+    last_session: null,
+    session_ids: [],
+    baseline_head: baseline,
+    blocker: repairedControllerBlocker,
+  });
+  queue.revision += 1;
+  queue.project_status = "blocked";
+  queue.tasks.M001.status = "blocked";
+  await writeJson(stateFile, state);
+  await writeJson(queueFile, queue);
+  await rm(candidateFile, { force: true });
+  await writeFile(path.join(root, "package.json"), "{\"private\":true,\"packageManager\":\"pnpm@11.14.0\"}\n", "utf8");
+  await writeFile(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\nsettings: {}\nimporters:\n  .: {}\n", "utf8");
+  await mkdir(path.join(root, "apps"), { recursive: true });
+  await writeFile(path.join(root, "apps", "preserved.txt"), "preserved after v1.6.20\n", "utf8");
+
+  const outputs = [];
+  for (const relative of v170LocalOverlap) {
+    const bytes = await readFile(path.join(sourceSkill, "assets", "project", ...relative.split("/")));
+    const destination = path.join(root, ...relative.split("/"));
+    await mkdir(path.dirname(destination), { recursive: true });
+    await writeFile(destination, tamper && relative === ".opencode/commands/evolve-project.md"
+      ? Buffer.concat([bytes, Buffer.from("user drift\n")])
+      : bytes);
+    outputs.push({ relative, sha256: installerTreeHash(bytes) });
+  }
+  const localManifestDirectory = path.join(root, ".opencode-control-plane");
+  await mkdir(localManifestDirectory, { recursive: true });
+  await writeJson(path.join(localManifestDirectory, "install.json"), {
+    schema_version: 1,
+    product_id: "opencode-control-plane",
+    version: "1.7.0",
+    repository: "https://github.com/therealedo/opencode-control-plane.git",
+    installed_at: "2026-07-28T02:46:16.768Z",
+    updated_at: "2026-07-28T02:46:16.769Z",
+    target: root,
+    source_root: path.resolve(sourceSkill, "..", "..", ".."),
+    manager_home: path.join(root, ".manager"),
+    outputs,
+  });
+  await mkdir(path.join(root, ".git", "info"), { recursive: true });
+  await writeFile(path.join(root, ".git", "info", "exclude"), "/.agents/\n/.opencode-control-plane/\n", "utf8");
+  return { root, sourceSkill, stateFile, queueFile, manifestFile };
+}
+
+test("v1.6.20 project-local bootstrap overlap reconciles safely", async (t) => {
+  const { root, sourceSkill, stateFile, queueFile, manifestFile } = await createV170MixedProject(t);
+  const queueBefore = await readFile(queueFile);
+  const statusBefore = await git(root, ["status", "--short"]);
+
+  const preview = await invoke(root, sourceSkill, ["--dry-run"]);
+  assert.equal(preview.code, 0, preview.stderr || preview.stdout);
+  const previewOutput = JSON.parse(preview.stdout);
+  assert.equal(previewOutput.from_version, "1.6.20");
+  assert.equal(previewOutput.to_version, "1.7.1");
+  assert.equal(previewOutput.recovery_kind, "controller-tool-structural");
+  assert.ok(previewOutput.changed_files.includes(".gitignore"));
+  assert.deepEqual(previewOutput.reconciled_local_install_files, [...v170LocalOverlap].sort());
+
+  const result = await invoke(root, sourceSkill);
+  assert.equal(result.code, 0, result.stderr || result.stdout);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.recovery_kind, "controller-tool-structural");
+  assert.deepEqual(output.reconciled_local_install_files, [...v170LocalOverlap].sort());
+
+  const recovered = await readJson(stateFile);
+  assert.equal(recovered.status, "human_required");
+  assert.equal(recovered.phase, "blocked");
+  assert.equal(recovered.active_task, "M001");
+  assert.equal(recovered.attempt, 1);
+  assert.equal(recovered.baseline_head, output.commit);
+  assert.deepEqual(recovered.blocker, repairedControllerBlocker);
+  assert.deepEqual(await readFile(queueFile), queueBefore);
+  assert.equal(await readFile(path.join(root, "apps", "preserved.txt"), "utf8"), "preserved after v1.6.20\n");
+  assert.match(await readFile(path.join(root, ".gitignore"), "utf8"), /^\.autopilot\/MANUAL_MODE$/m);
+
+  const upgraded = await readJson(manifestFile);
+  assert.equal(upgraded.version, "1.7.1");
+  assert.deepEqual(upgraded.migration_history.at(-1), {
+    from_version: "1.6.20",
+    to_version: "1.7.1",
+    applied_at: upgraded.migration_history.at(-1).applied_at,
+    kind: "upgrade-recovery",
+    recovered_task: "M001",
+    recovery_reason: "controller-tool-structural",
+  });
+  const expectedStatusAfter = statusBefore
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .filter((line) => !v170LocalOverlap.some((relative) => line.endsWith(relative)))
+    .join("\n")
+    .trim();
+  assert.equal(await git(root, ["status", "--short"]), expectedStatusAfter);
+});
+
+test("project-local overlap trust rejects bytes that differ from the release", async (t) => {
+  const { root, sourceSkill } = await createV170MixedProject(t, { tamper: true });
+  const headBefore = await git(root, ["rev-parse", "HEAD"]);
+
+  const preview = await invoke(root, sourceSkill, ["--dry-run"]);
+  assert.notEqual(preview.code, 0);
+  assert.equal(JSON.parse(preview.stderr).code, "CONTROL_PLANE_DRIFT");
+  assert.equal(await git(root, ["rev-parse", "HEAD"]), headBefore);
+});
 
 test("v1.6.18 free-form controller faults recover structurally with work preserved", async (t) => {
   const root = await createScaffold(t, { ready: true });

@@ -8,6 +8,7 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { registerProject } from "../.agents/skills/init-project/bin/lib/project-registry.mjs";
+import { collectManagedSources } from "../.agents/skills/init-project/bin/lib/control-plane-files.mjs";
 
 const MANIFEST_RELATIVE = ".opencode-control-plane/install.json";
 const PRODUCT_ID = "opencode-control-plane";
@@ -31,7 +32,7 @@ async function main() {
   if (!args.target) throw failure("Choose a project folder with --target PATH", "TARGET_REQUIRED");
   const target = path.resolve(args.target);
   const sourceSkill = path.join(sourceRoot, ".agents", "skills", "init-project");
-  const release = await readJson(path.join(sourceSkill, "assets", "control-plane-release.json"), 128 * 1024);
+  const { release, entries: managedRuntimeEntries } = await collectManagedSources(sourceSkill);
   if (release.product_id !== PRODUCT_ID || release.version !== (await readJson(path.join(sourceRoot, "package.json"), 128 * 1024)).version) {
     throw failure("The Control Plane source checkout has inconsistent version metadata", "SOURCE_INVALID");
   }
@@ -44,10 +45,11 @@ async function main() {
   const project = await inspectProject(target, prior);
   const runtime = await planRuntimeUpgrade(target, sourceSkill, release.version, project);
   const managerHome = path.join(sourceRoot, ".control-plane-home");
-  const actions = projectActions(sourceRoot, target, project.kind);
+  const preserveRuntimeOwned = args.bootstrapOnly && runtime.required;
+  const actions = projectActions(sourceRoot, target, project.kind, { preserveRuntimeOwned, managedRuntimeEntries });
   const sourceHashes = new Map();
   for (const action of actions) sourceHashes.set(action.relative, await treeSha256(action.source));
-  await assertOwnership(target, actions, sourceHashes, prior, project);
+  const installChangedFiles = await assertOwnership(target, actions, sourceHashes, prior, project);
 
   const preview = {
     ok: true,
@@ -57,6 +59,10 @@ async function main() {
     source_root: sourceRoot,
     manager_home: managerHome,
     control_plane_version: release.version,
+    from_version: runtime.from_version ?? prior?.version ?? null,
+    to_version: release.version,
+    changed: (!args.bootstrapOnly && runtime.required) || installChangedFiles.length > 0 || prior?.version !== release.version,
+    changed_files: installChangedFiles,
     runtime_upgrade: args.bootstrapOnly && runtime.required ? { ...runtime, skipped: "bootstrap-only migration" } : runtime,
     actions: actions.map((action) => ({ relative: action.relative, destination: action.destination, sha256: sourceHashes.get(action.relative) })),
     manifest: path.join(target, ...MANIFEST_RELATIVE.split("/")),
@@ -90,25 +96,29 @@ async function main() {
   }, args.json);
 }
 
-function projectActions(sourceRoot, target, kind) {
+function projectActions(sourceRoot, target, kind, { preserveRuntimeOwned = false, managedRuntimeEntries = new Map() } = {}) {
   const templateCommands = path.join(sourceRoot, ".agents", "skills", "init-project", "assets", "project", ".opencode", "commands");
   const projectTemplate = path.join(sourceRoot, ".agents", "skills", "init-project", "assets", "project");
   const definitions = [
     [".agents/skills/evolve-project", path.join(sourceRoot, ".agents", "skills", "evolve-project")],
     [".agents/skills/init-project", path.join(sourceRoot, ".agents", "skills", "init-project")],
+  ];
+  definitions.push(
     [".opencode/commands/evolve-project.md", path.join(templateCommands, "evolve-project.md")],
     [".opencode/commands/init-project.md", path.join(templateCommands, "init-project.md")],
-  ];
+  );
   if (kind !== "fresh") definitions.push(
     [".autopilot/bin/manual-mode.mjs", path.join(projectTemplate, ".autopilot", "bin", "manual-mode.mjs")],
     ["manual-mode", path.join(projectTemplate, "manual-mode")],
     ["manual-mode.cmd", path.join(projectTemplate, "manual-mode.cmd")],
   );
-  return definitions.map(([relative, source]) => ({
+  return definitions
+    .filter(([relative]) => !preserveRuntimeOwned || !managedRuntimeEntries.has(relative))
+    .map(([relative, source]) => ({
     relative,
     source,
     destination: path.join(target, ...relative.split("/")),
-  }));
+    }));
 }
 
 async function inspectProject(target, prior) {
@@ -149,9 +159,11 @@ async function upgradeRuntime(target, sourceSkill, kind) {
 
 async function assertOwnership(target, actions, sourceHashes, prior, project) {
   const priorOutputs = new Map((prior?.outputs ?? []).map((item) => [item.relative, item]));
+  const changed = [];
   for (const action of actions) {
-    if (!(await exists(action.destination))) continue;
+    if (!(await exists(action.destination))) { changed.push(action.relative); continue; }
     const current = await treeSha256(action.destination);
+    if (current !== sourceHashes.get(action.relative)) changed.push(action.relative);
     const owned = priorOutputs.get(action.relative);
     if (owned) {
       if (current !== owned.sha256) throw failure(`Project-local Control Plane file drifted outside the installer: ${action.relative}`, "LOCAL_INSTALL_DRIFT");
@@ -165,6 +177,7 @@ async function assertOwnership(target, actions, sourceHashes, prior, project) {
     }
     throw failure(`Refusing to replace an unowned project path: ${action.relative}`, "LOCAL_INSTALL_CONFLICT");
   }
+  return changed;
 }
 
 async function transactionalInstall({ target, sourceRoot, managerHome, release, actions, sourceHashes, prior }) {

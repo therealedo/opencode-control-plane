@@ -58,9 +58,14 @@ export async function upgradeRegisteredProject(project, { dryRun = false, waitMs
     }
     try {
       const preview = await invokeUpdater(root, { dryRun: true });
+      if (typeof preview.changed !== "boolean") {
+        const error = new Error("Project updater preview omitted its required changed boolean");
+        error.code = "UPDATER_PROTOCOL_INVALID";
+        throw error;
+      }
       return result(project, preview.changed ? "preview" : "current", {
-        from_version: preview.from_version,
-        to_version: preview.to_version,
+        from_version: preview.from_version ?? preview.runtime_upgrade?.from_version,
+        to_version: preview.to_version ?? preview.runtime_upgrade?.to_version,
         changed_files: preview.changed_files,
         recovered_active_task: preview.recovered_active_task ?? null,
         recovery_kind: preview.recovery_kind ?? null,
@@ -85,7 +90,14 @@ export async function upgradeRegisteredProject(project, { dryRun = false, waitMs
 
   let upgrade;
   let updateError = null;
-  try { upgrade = await invokeUpdater(root); }
+  try {
+    upgrade = await invokeUpdater(root);
+    if (typeof upgrade.changed !== "boolean") {
+      const error = new Error("Project updater result omitted its required changed boolean");
+      error.code = "UPDATER_PROTOCOL_INVALID";
+      throw error;
+    }
+  }
   catch (error) { updateError = error; }
   let resumed = false;
   let resumeError = null;

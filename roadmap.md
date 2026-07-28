@@ -46,8 +46,12 @@ Blueprint and migration history belong to the cold planning path. They must not 
 
 Repository ownership and runtime placement are separate concerns. Durable product contracts and accepted evidence should remain reviewable with the project, while frequently written state, logs, locks, temporary phase contracts, and executable runtime files should move out of synchronized target repositories when this can be done without weakening recovery, portability, or rollback.
 
-## Current baseline: v1.7.0
+## Current baseline: v1.7.1
 
+- [x] Repair the exact v1.7.0 project-local bootstrap overlap without trusting arbitrary managed-file drift or discarding active application work.
+- [x] Keep bootstrap-only adoption from copying runtime-owned files before the runtime migration is allowed to run.
+- [x] Report required project runtime upgrades as previews instead of incorrectly labeling mixed-version projects current.
+- [x] Migrate the versioned Control Plane `.gitignore` section transactionally, preserve project-owned rules, and keep all launchers byte-stable across Windows CRLF checkouts.
 - [x] Keep every OpenCode-facing skill, command, agent, plugin, instruction, and runtime project-local.
 - [x] Provide one launcher-only global terminal command so `control-plane` opens the fleet dashboard from any folder without exposing Control Plane to unrelated OpenCode projects.
 - [x] Add a transactional one-command installer for new and existing projects.

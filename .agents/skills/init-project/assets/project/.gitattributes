@@ -3,6 +3,8 @@
 /AGENTS.md text eol=lf
 /control-plane text eol=lf
 /control-plane.cmd text eol=lf
+/manual-mode text eol=lf
+/manual-mode.cmd text eol=lf
 /.ignore text eol=lf
 /.autopilot/control-plane.json text eol=lf
 /.autopilot/bin/** text eol=lf
