@@ -48,7 +48,8 @@ Repository ownership and runtime placement are separate concerns. Durable produc
 
 ## Current baseline: v1.7.0
 
-- [x] Make installation project-local; stop requiring global skills, commands, or PATH launchers.
+- [x] Keep every OpenCode-facing skill, command, agent, plugin, instruction, and runtime project-local.
+- [x] Provide one launcher-only global terminal command so `control-plane` opens the fleet dashboard from any folder without exposing Control Plane to unrelated OpenCode projects.
 - [x] Add a transactional one-command installer for new and existing projects.
 - [x] Move the fleet registry into the source checkout instead of the user profile.
 - [x] Let projects upgrade independently from their recorded source checkout.

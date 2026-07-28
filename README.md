@@ -4,7 +4,23 @@ A high-efficiency, zero-token orchestrator that turns OpenCode into a policy-bou
 
 Repository: https://github.com/therealedo/opencode-control-plane.git
 
-Control Plane is **project-local**. It does not need global skills, global OpenCode commands, or a PATH launcher.
+Control Plane is **project-local where OpenCode can see it**. Only the terminal command is global. Skills, agents, commands, plugins, instructions, and controller code are installed only in projects you explicitly enroll.
+
+## One-time terminal setup
+
+From this repository, run:
+
+```powershell
+.\install-launcher.cmd
+```
+
+After that, open a new terminal anywhere and run:
+
+```powershell
+control-plane
+```
+
+This opens the central project dashboard. The setup installs one tiny terminal launcher in your existing user command folder. It does **not** add anything to global `.agents`, OpenCode commands, plugins, or configuration.
 
 ## Install it in a new project
 
@@ -20,7 +36,7 @@ Control Plane is **project-local**. It does not need global skills, global OpenC
 5. Run `/init-project` and complete the interview.
 6. After finalization, open `control-plane.cmd` inside the project and choose **Start worker**.
 
-Nothing is installed in your user profile. The project gets its own `init-project` and `evolve-project` skills, OpenCode commands, controller, and dashboard.
+Only the terminal launcher is installed in your user profile. The project gets its own `init-project` and `evolve-project` skills, OpenCode commands, controller, and dashboard. An unrelated OpenCode project sees none of them.
 
 ## Daily use
 
@@ -33,7 +49,7 @@ Inside an initialized project:
 - **Change product blueprint** starts targeted blueprint evolution.
 - **Upgrade Control Plane** updates only that project from this source checkout.
 
-From this repository, `control-plane.cmd` opens the fleet dashboard. Its private project list lives in `.control-plane-home/` inside this checkout and is not committed.
+From any terminal, `control-plane` opens the fleet dashboard. Its private project list lives in `.control-plane-home/` inside this checkout and is not committed.
 
 ## Work without Control Plane
 
@@ -78,10 +94,18 @@ npm run uninstall:global
 
 The uninstaller preserves unrelated skills and OpenCode configuration and migrates the old project list into this checkout's local fleet dashboard.
 
+This removes the old global OpenCode workflow, not the safe terminal-only launcher. To remove that launcher too, run:
+
+```powershell
+npm run launcher:remove
+```
+
 ## What each important file does
 
 - `install-project.cmd`: installs or refreshes Control Plane in one project.
-- `control-plane.cmd`: opens the source-local fleet dashboard.
+- `install-launcher.cmd`: installs only the global terminal command.
+- `control-plane.cmd`: opens the fleet dashboard from this checkout.
+- `scripts/install-launcher.mjs`: safely owns the single global terminal shim.
 - `scripts/install-project.mjs`: guarded transactional project installer.
 - `scripts/uninstall-global.mjs`: manifest-verified legacy global removal.
 - `.agents/skills/init-project/`: initialization interview, scaffold, controller template, and upgrade logic.
@@ -93,5 +117,6 @@ The uninstaller preserves unrelated skills and OpenCode configuration and migrat
 - Never overwrites project-local Control Plane files that drifted outside the installer.
 - Never automatically deletes application code or an initialized project.
 - Upgrades use the existing guarded project migration path.
+- The global launcher contains no OpenCode skill, prompt, agent, plugin, or configuration.
 - Global removal deletes only hash-verified manifest-owned outputs.
 - Manual mode and autonomous mode cannot run at the same time.

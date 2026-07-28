@@ -14,6 +14,9 @@
   },
   "scripts": {
     "setup": "node scripts/install-project.mjs",
+    "launcher:install": "node scripts/install-launcher.mjs",
+    "launcher:dry-run": "node scripts/install-launcher.mjs --dry-run",
+    "launcher:remove": "node scripts/install-launcher.mjs --remove",
     "project:install": "node scripts/install-project.mjs",
     "uninstall:global": "node scripts/uninstall-global.mjs",
     "legacy:global-install": "node scripts/install.mjs",

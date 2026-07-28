@@ -142,6 +142,9 @@ for (const required of [
   path.join(skillRoot, "init-project", "bin", "upgrade-project.mjs"),
   path.join(skillRoot, "init-project", "bin", "lib", "control-plane-files.mjs"),
   path.join(root, "scripts", "upgrade.mjs"),
+  path.join(root, "scripts", "install-launcher.mjs"),
+  path.join(root, "install-launcher.cmd"),
+  path.join(root, "install-launcher"),
 ]) {
   if (!(await exists(required))) errors.push(`Missing Control Plane release/upgrade source: ${relative(required)}`)
 }
@@ -471,6 +474,8 @@ if (!(await exists(readmePath))) {
     "high-efficiency, zero-token orchestrator that turns OpenCode into a policy-bounded, self-verifying coding worker. Keeping it lean, fast, and terminal-native is its superpower",
     "https://github.com/therealedo/opencode-control-plane.git",
     "install-project.cmd",
+    "install-launcher.cmd",
+    "scripts/install-launcher.mjs",
     "scripts/install-project.mjs",
     "control-plane.cmd",
     "manual-mode.cmd on",
@@ -479,6 +484,7 @@ if (!(await exists(readmePath))) {
     "Update everything",
     "Worker reasoning",
     "Start worker",
+    "Only the terminal command is global",
   ]) {
     if (!readme.includes(required)) errors.push(`README.md is missing beginner contract text: ${required}`)
   }
